@@ -8,8 +8,8 @@ on:
     branches: [ main ]
   workflow_dispatch:
     inputs:
-      publish_testpypi:
-        description: "Also publish build to TestPyPI (for manual test runs)?"
+      publish_pypi:
+        description: "Also publish build to PyPI?"
         required: false
         default: "false"
 
@@ -76,13 +76,13 @@ jobs:
     name: Build & Publish
     # Use GitHub Environment 'pypi' (configure in repo settings for protections & secrets)
     environment:
-      name: test-pypi
+      name: pypi
       url: https://pypi.org/project/ib-mcp/
     needs: [test]
     runs-on: ubuntu-latest
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_testpypi == 'true')
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_pypi == 'true')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -113,14 +113,14 @@ jobs:
           poetry build
           ls -l dist
 
-      - name: Publish to TestPyPI (manual dispatch)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_testpypi == 'true'
+      - name: Publish to PyPI (manual dispatch)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_pypi == 'true'
         env:
-          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          if [ -z "${TEST_PYPI_TOKEN}" ]; then echo "TEST_PYPI_API_TOKEN secret missing" && exit 1; fi
-          poetry config repositories.testpypi https://test.pypi.org/legacy/
-          poetry publish --repository testpypi --username __token__ --password "$TEST_PYPI_TOKEN" --no-interaction
+          if [ -z "${PYPI_TOKEN}" ]; then echo "PYPI_API_TOKEN secret missing" && exit 1; fi
+          poetry config repositories.pypi https://pypi.org/legacy/
+          poetry publish --repository pypi --username __token__ --password "$PYPI_TOKEN" --no-interaction
 
       - name: Publish to PyPI (Trusted Publishing)
         if: startsWith(github.ref, 'refs/tags/v')
