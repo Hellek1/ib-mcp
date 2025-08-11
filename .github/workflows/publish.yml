@@ -76,7 +76,7 @@ jobs:
     name: Build & Publish
     # Use GitHub Environment 'pypi' (configure in repo settings for protections & secrets)
     environment:
-      name: pypi
+      name: test-pypi
       url: https://pypi.org/project/ib-mcp/
     needs: [test]
     runs-on: ubuntu-latest
