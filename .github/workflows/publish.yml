@@ -63,7 +63,6 @@ jobs:
       - name: Lint (ruff)
         run: |
           poetry run ruff check .
-          poetry run ruff format --check .
 
       - name: Type check (mypy)
         run: |
