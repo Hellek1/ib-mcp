@@ -1,0 +1,73 @@
+[tool.poetry]
+name = "ib-mcp"
+version = "0.2.3"
+description = "Model Context Protocol (MCP) server exposing Interactive Brokers data via ib_async + FastMCP"
+authors = ["David Hellekalek <hellekalek@gmail.com>"]
+license = "BSD-3-Clause"
+readme = "README.md"
+homepage = "https://github.com/Hellek1/ib-mcp"
+repository = "https://github.com/Hellek1/ib-mcp"
+documentation = "https://github.com/Hellek1/ib-mcp#readme"
+keywords = ["interactive-brokers", "ib", "ibapi", "tws", "asyncio", "mcp", "fastmcp", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Typing :: Typed",
+]
+
+# Use flat layout (package lives at project root)
+packages = [ { include = "ib_mcp" } ]
+
+# Include type information marker
+include = ["ib_mcp/py.typed"]
+
+[tool.poetry.scripts]
+ib-mcp-server = "ib_mcp.server:main"
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+# Core runtime deps
+ib_async = "^2.0.1"
+fastmcp = ">=2.11.0"
+# Low-level MCP protocol lib (kept separate; fastmcp currently builds on it)
+defusedxml = ">=0.7.1"
+
+# (Optional) pin pydantic major for stability if fastmcp upgrades; uncomment if needed
+# pydantic = "^2.8"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0"
+pytest-asyncio = ">=0.23"
+mypy = ">=1.11.0"
+ruff = ">=0.5.0"
+pre-commit = ">=3.8.0"
+
+[tool.mypy]
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ANN", "S", "ISC", "W"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"

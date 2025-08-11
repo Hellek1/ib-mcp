@@ -1,0 +1,62 @@
+# Exclude VCS and development artifacts
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+htmlcov/
+coverage.xml
+*.log
+
+# Python envs
+venv/
+.venv/
+
+# Tooling
+.idea/
+.vscode/
+
+# Tests and CI (not needed at runtime)
+tests/
+.github/
+
+# Misc
+Dockerfile
+pyproject.toml
+CONTRIBUTING.md
+README.MD
+LICENSE
+
+# Keep only runtime package code# Exclude VCS and local artifacts
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache
+.venv
+
+# Build/test
+.eggs
+build/
+dist/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Editors
+.vscode/
+.idea/
+
+# Misc
+.DS_Store
