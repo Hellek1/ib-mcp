@@ -1,0 +1,138 @@
+name: CI & Publish
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      publish_testpypi:
+        description: "Also publish build to TestPyPI (for manual test runs)?"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  id-token: write  # Needed for OIDC (PyPI Trusted Publishing)
+
+env:
+  POETRY_VERSION: 1.8.3
+  PYTHONUNBUFFERED: "1"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install Poetry
+        run: |
+          pip install --upgrade pip
+          pip install "poetry==${POETRY_VERSION}"
+
+      - name: Cache Poetry virtualenvs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pypoetry/virtualenvs
+          key: poetry-venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            poetry-venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          poetry install --no-interaction --no-root
+
+      - name: Lint (ruff)
+        run: |
+          poetry run ruff check .
+          poetry run ruff format --check .
+
+      - name: Type check (mypy)
+        run: |
+          poetry run mypy .
+
+      - name: Tests (pytest)
+        run: |
+          poetry run pytest -q
+
+  build_and_publish:
+    name: Build & Publish
+    # Use GitHub Environment 'pypi' (configure in repo settings for protections & secrets)
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ib-mcp/
+    needs: [test]
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_testpypi == 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Poetry
+        run: |
+          pip install --upgrade pip
+          pip install "poetry==${POETRY_VERSION}"
+
+      - name: Verify tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python -c "import pathlib, tomllib, os, sys; tag=os.environ.get('GITHUB_REF_NAME'); data=tomllib.loads(pathlib.Path('pyproject.toml').read_text()); version=data['tool']['poetry']['version']; exp=f'v{version}';\nimport sys as _s;\n\n\nprint(f'Version check passed: {tag} matches pyproject version {version}') if tag==exp else (_s.stderr.write(f'Tag {tag} does not match project version {version} (expected {exp})\n') or _s.exit(1))"
+
+      - name: Install deps (no dev)
+        run: |
+          poetry install --only main --no-interaction --no-root
+
+      - name: Build artifacts
+        run: |
+          poetry build
+          ls -l dist
+
+      - name: Publish to TestPyPI (manual dispatch)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_testpypi == 'true'
+        env:
+          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          if [ -z "${TEST_PYPI_TOKEN}" ]; then echo "TEST_PYPI_API_TOKEN secret missing" && exit 1; fi
+          poetry config repositories.testpypi https://test.pypi.org/legacy/
+          poetry publish --repository testpypi --username __token__ --password "$TEST_PYPI_TOKEN" --no-interaction
+
+      - name: Publish to PyPI (Trusted Publishing)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          attestations: true
+
+      - name: Upload dist artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*

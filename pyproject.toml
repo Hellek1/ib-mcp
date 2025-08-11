@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ib-mcp"
-version = "0.2.3"
+version = "0.2.4"
 description = "Model Context Protocol (MCP) server exposing Interactive Brokers data via ib_async + FastMCP"
 authors = ["David Hellekalek <hellekalek@gmail.com>"]
 license = "BSD-3-Clause"
