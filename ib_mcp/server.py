@@ -96,6 +96,36 @@ class IBMCPServer:
             except ET.ParseError:
                 return xml_data
 
+        def _format_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
+            """Format data as a markdown table."""
+            if not headers or not rows:
+                return ""
+
+            # Create header row
+            header_row = "| " + " | ".join(headers) + " |"
+
+            # Create separator row
+            separator_row = "| " + " | ".join("---" for _ in headers) + " |"
+
+            # Create data rows
+            data_rows = []
+            for row in rows:
+                # Pad row to match header length if needed
+                padded_row = row + [""] * (len(headers) - len(row))
+                data_rows.append("| " + " | ".join(padded_row[:len(headers)]) + " |")
+
+            return "\n".join([header_row, separator_row] + data_rows)
+
+        def _format_markdown_list(items: list[str], ordered: bool = False) -> str:
+            """Format items as a markdown list."""
+            if not items:
+                return ""
+
+            if ordered:
+                return "\n".join(f"{i+1}. {item}" for i, item in enumerate(items))
+            else:
+                return "\n".join(f"- {item}" for item in items)
+
         def _xml_element_to_markdown(element: ET.Element, level: int = 0) -> str:
             markdown = ""
             indent = "  " * level
@@ -137,25 +167,43 @@ class IBMCPServer:
                 contracts = _flatten_contracts(contracts_raw)
                 if not contracts:
                     return f"No contract found for {symbol}"
-                lines = [f"Found {len(contracts)} contract(s) for {symbol}:"]
-                for i, c in enumerate(contracts, 1):
+
+                if len(contracts) == 1:
+                    c = contracts[0]
+                    return "\n".join([
+                        f"# Contract Details for {symbol}",
+                        "",
+                        f"- **ConID**: {getattr(c, 'conId', '')}",
+                        f"- **Symbol**: {getattr(c, 'symbol', '')}",
+                        f"- **Security Type**: {getattr(c, 'secType', '')}",
+                        f"- **Exchange**: {getattr(c, 'exchange', '')}",
+                        f"- **Primary Exchange**: {getattr(c, 'primaryExchange', '')}",
+                        f"- **Currency**: {getattr(c, 'currency', '')}",
+                        f"- **Trading Class**: {getattr(c, 'tradingClass', '')}",
+                        f"- **Local Symbol**: {getattr(c, 'localSymbol', '')}",
+                    ])
+
+                # Multiple contracts - use table format
+                headers = [
+                    "ConID", "Symbol", "SecType", "Exchange", "Primary Exch", "Currency",
+                    "Trading Class"
+                ]
+                rows = []
+                for c in contracts:
                     if c is None:
                         continue
-                    lines.extend(
-                        [
-                            f"Contract {i}:",
-                            f"  ConID: {getattr(c, 'conId', '')}",
-                            f"  Symbol: {getattr(c, 'symbol', '')}",
-                            f"  SecType: {getattr(c, 'secType', '')}",
-                            f"  Exchange: {getattr(c, 'exchange', '')}",
-                            f"  Primary Exchange: {getattr(c, 'primaryExchange', '')}",
-                            f"  Currency: {getattr(c, 'currency', '')}",
-                            f"  Trading Class: {getattr(c, 'tradingClass', '')}",
-                            f"  Local Symbol: {getattr(c, 'localSymbol', '')}",
-                            "",
-                        ]
-                    )
-                return "\n".join(lines)
+                    rows.append([
+                        str(getattr(c, 'conId', '')),
+                        str(getattr(c, 'symbol', '')),
+                        str(getattr(c, 'secType', '')),
+                        str(getattr(c, 'exchange', '')),
+                        str(getattr(c, 'primaryExchange', '')),
+                        str(getattr(c, 'currency', '')),
+                        str(getattr(c, 'tradingClass', ''))
+                    ])
+
+                table = _format_markdown_table(headers, rows)
+                return f"# Found {len(contracts)} contract(s) for {symbol}\n\n{table}"
             except Exception as e:  # pragma: no cover - depends on network
                 return f"Error looking up contract: {e}"
 
@@ -174,19 +222,30 @@ class IBMCPServer:
                 if not contracts:
                     return f"No contract found for {symbol}"
                 conid = getattr(contracts[0], "conId", None)
-                result = [f"ConID for {symbol}: {conid}"]
-                if len(contracts) > 1:
-                    result.append(
-                        f"\nNote: Found {len(contracts)} contracts. Using first one."
+
+                if len(contracts) == 1:
+                    return f"**ConID for {symbol}**: {conid}"
+
+                # Multiple contracts found
+                result = [
+                    f"# ConID for {symbol}",
+                    f"**Primary ConID**: {conid}",
+                    "",
+                    f"**Note**: Found {len(contracts)} contracts. Using first one.",
+                    "",
+                    "## All ConIDs found:",
+                ]
+
+                contract_list = []
+                for _, c in enumerate(contracts, 1):
+                    if c is None:
+                        continue
+                    contract_list.append(
+                        f"{getattr(c, 'conId', '')} "
+                        f"({getattr(c, 'exchange', '')}, {getattr(c, 'currency', '')})"
                     )
-                    result.append("All ConIDs found:")
-                    for i, c in enumerate(contracts, 1):
-                        if c is None:
-                            continue
-                        result.append(
-                            f"  {i}. {getattr(c, 'conId', '')} "
-                            f"({getattr(c, 'exchange', '')}, {getattr(c, 'currency', '')})"
-                        )
+
+                result.append(_format_markdown_list(contract_list, ordered=True))
                 return "\n".join(result)
             except Exception as e:  # pragma: no cover
                 return f"Error converting ticker to conid: {e}"
@@ -227,34 +286,36 @@ class IBMCPServer:
                 )
                 if not bars:
                     return f"No historical data found for {symbol}"
-                header = [
-                    f"Historical data for {symbol} ({getattr(c, 'conId', '')}):",
-                    (
-                        f"Duration: {duration}, Bar Size: {bar_size}, "
-                        f"Data Type: {data_type}"
-                    ),
-                    "",
-                    (
-                        f"{'Date':<12} {'Open':<10} {'High':<10} {'Low':<10} "
-                        f"{'Close':<10} {'Volume':<12}"
-                    ),
-                    "-" * 70,
-                ]
-                lines = []
+
+                headers = ["Date", "Open", "High", "Low", "Close", "Volume"]
+                rows = []
                 for bar in bars[-max_bars:]:
                     if hasattr(bar.date, "strftime"):
                         date_str = bar.date.strftime("%Y-%m-%d")  # type: ignore[attr-defined]
                     else:
                         date_str = str(bar.date)
-                    lines.append(
-                        f"{date_str:<12} {bar.open:<10.2f} {bar.high:<10.2f} "
-                        f"{bar.low:<10.2f} {bar.close:<10.2f} {bar.volume:<12}"
-                    )
+                    rows.append([
+                        date_str,
+                        f"{bar.open:.2f}",
+                        f"{bar.high:.2f}",
+                        f"{bar.low:.2f}",
+                        f"{bar.close:.2f}",
+                        str(bar.volume)
+                    ])
+
+                table = _format_markdown_table(headers, rows)
+                result = [
+                    f"# Historical Data for {symbol} ({getattr(c, 'conId', '')})",
+                    f"**Duration**: {duration} | **Bar Size**: {bar_size} | "
+                    f"**Data Type**: {data_type}",
+                    "",
+                    table
+                ]
+
                 if len(bars) > max_bars:
-                    lines.append(
-                        f"\n... showing last {max_bars} of {len(bars)} total bars"
-                    )
-                return "\n".join(header + lines)
+                    result.append(f"\n*Showing last {max_bars} of {len(bars)} total bars*")
+
+                return "\n".join(result)
             except Exception as e:  # pragma: no cover
                 return f"Error getting historical data: {e}"
 
@@ -269,23 +330,27 @@ class IBMCPServer:
                 results = await self.ib.reqMatchingSymbolsAsync(pattern)
                 if not results:
                     return f"No contracts found matching '{pattern}'"
-                lines = [f"Contracts matching '{pattern}':", ""]
-                for i, desc in enumerate(results[:10], 1):
+
+                contract_items = []
+                for desc in results[:10]:
                     c = desc.contract
                     if c is None:
                         continue
-                    lines.extend(
-                        [
-                            f"{i}. {c.symbol} ({c.conId})",
-                            f"   - Security Type: {c.secType}",
-                            f"   - Exchange: {c.primaryExchange or c.exchange}",
-                            f"   - Currency: {c.currency}",
-                            "",
-                        ]
+                    contract_items.append(
+                        f"**{c.symbol}** ({c.conId}) - {c.secType} on "
+                        f"{c.primaryExchange or c.exchange} ({c.currency})"
                     )
+
+                result = [
+                    f"# Contracts matching '{pattern}'",
+                    "",
+                    _format_markdown_list(contract_items, ordered=True)
+                ]
+
                 if len(results) > 10:
-                    lines.append(f"... and {len(results) - 10} more results")
-                return "\n".join(lines)
+                    result.append(f"\n*... and {len(results) - 10} more results*")
+
+                return "\n".join(result)
             except Exception as e:  # pragma: no cover
                 return f"Error searching contracts: {e}"
 
@@ -317,23 +382,29 @@ class IBMCPServer:
                 )
                 if not news:
                     return f"No historical news found for {symbol}"
-                lines = [
-                    f"Historical news for {symbol} ({getattr(c, 'conId', '')}):",
-                    f"Period: {start_date} to {end_date}",
-                    "",
+
+                result = [
+                    f"# Historical News for {symbol} ({getattr(c, 'conId', '')})",
+                    f"**Period**: {start_date} to {end_date}",
+                    ""
                 ]
+
                 if isinstance(news, list):
-                    for i, article in enumerate(news[:max_count], 1):
-                        lines.extend(
-                            [
-                                f"{i}. {getattr(article, 'headline', '')}",
-                                f"   Time: {getattr(article, 'time', '')}",
-                                f"   Provider: {getattr(article, 'providerCode', '')}",
-                                f"   Article ID: {getattr(article, 'articleId', '')}",
-                                "",
-                            ]
+                    news_items = []
+                    for article in news[:max_count]:
+                        headline = getattr(article, 'headline', 'No headline')
+                        time_str = getattr(article, 'time', 'No time')
+                        provider = getattr(article, 'providerCode', 'Unknown provider')
+                        article_id = getattr(article, 'articleId', 'No ID')
+
+                        news_items.append(
+                            f"**{headline}**  \n*{time_str}* | Provider: {provider} | "
+                            f"ID: {article_id}"
                         )
-                return "\n".join(lines)
+
+                    result.append(_format_markdown_list(news_items, ordered=True))
+
+                return "\n".join(result)
             except Exception as e:  # pragma: no cover
                 return f"Error getting historical news: {e}"
 
@@ -371,10 +442,10 @@ class IBMCPServer:
                 else:
                     formatted = raw_text
                 if truncate and truncate > 0 and len(formatted) > truncate:
-                    formatted = formatted[:truncate].rstrip() + "... (truncated)"
+                    formatted = formatted[:truncate].rstrip() + "... *(truncated)*"
                 return "\n".join(
                     [
-                        f"Article {articleId} ({providerCode}):",
+                        f"# Article {articleId} ({providerCode})",
                         "",
                         formatted,
                     ]
@@ -408,8 +479,8 @@ class IBMCPServer:
                     return f"No fundamental data found for {symbol}"
                 formatted = _xml_to_markdown(data)
                 lines = [
-                    f"Fundamental data for {symbol} ({getattr(c, 'conId', '')}):",
-                    f"Report Type: {report_type}",
+                    f"# Fundamental Data for {symbol} ({getattr(c, 'conId', '')})",
+                    f"**Report Type**: {report_type}",
                     "",
                     formatted,
                 ]
@@ -426,21 +497,21 @@ class IBMCPServer:
                 items = self.ib.portfolio(account)
                 if not items:
                     return "No portfolio items found"
-                head = [
-                    f"Portfolio {'for account ' + account if account else '(all accounts)'}:",
-                    "",
-                    (
-                        f"{'Symbol':<10} {'Position':<10} {'Avg Cost':<12} "
-                        f"{'Market Value':<15} {'Unrealized PnL':<15}"
-                    ),
-                    "-" * 70,
-                ]
-                rows = [
-                    f"{it.contract.symbol:<10} {it.position:<10} {it.averageCost:<12.2f} "
-                    f"{it.marketValue:<15.2f} {it.unrealizedPNL:<15.2f}"
-                    for it in items
-                ]
-                return "\n".join(head + rows)
+
+                headers = ["Symbol", "Position", "Avg Cost", "Market Value", "Unrealized PnL"]
+                rows = []
+                for it in items:
+                    rows.append([
+                        str(it.contract.symbol),
+                        str(it.position),
+                        f"{it.averageCost:.2f}",
+                        f"{it.marketValue:.2f}",
+                        f"{it.unrealizedPNL:.2f}"
+                    ])
+
+                table = _format_markdown_table(headers, rows)
+                account_title = f" for account {account}" if account else " (all accounts)"
+                return f"# Portfolio{account_title}\n\n{table}"
             except Exception as e:  # pragma: no cover
                 return f"Error getting portfolio: {e}"
 
@@ -456,17 +527,23 @@ class IBMCPServer:
                 by_acc: dict[str, list[Any]] = {}
                 for v in vals:
                     by_acc.setdefault(v.account, []).append(v)
-                lines: list[str] = [
-                    f"Account Summary {'for ' + account if account else '(all accounts)'}:",
-                    "",
-                ]
+
+                account_title = f" for {account}" if account else " (all accounts)"
+                result = [f"# Account Summary{account_title}", ""]
+
                 for acc, values in by_acc.items():
-                    lines.append(f"Account: {acc}")
-                    lines.append("-" * 40)
+                    result.append(f"## Account: {acc}")
+                    result.append("")
+
+                    # Create markdown list of account values
+                    account_items = []
                     for v in values:
-                        lines.append(f"{v.tag}: {v.value} {v.currency}")
-                    lines.append("")
-                return "\n".join(lines)
+                        account_items.append(f"**{v.tag}**: {v.value} {v.currency}")
+
+                    result.append(_format_markdown_list(account_items))
+                    result.append("")
+
+                return "\n".join(result)
             except Exception as e:  # pragma: no cover
                 return f"Error getting account summary: {e}"
 
@@ -479,17 +556,20 @@ class IBMCPServer:
                 positions = self.ib.positions(account)
                 if not positions:
                     return "No positions found"
-                head = [
-                    f"Positions {'for account ' + account if account else '(all accounts)'}:",
-                    "",
-                    f"{'Account':<10} {'Symbol':<10} {'Position':<10} {'Avg Cost':<12}",
-                    "-" * 50,
-                ]
-                rows = [
-                    f"{p.account:<10} {p.contract.symbol:<10} {p.position:<10} {p.avgCost:<12.2f}"
-                    for p in positions
-                ]
-                return "\n".join(head + rows)
+
+                headers = ["Account", "Symbol", "Position", "Avg Cost"]
+                rows = []
+                for p in positions:
+                    rows.append([
+                        str(p.account),
+                        str(p.contract.symbol),
+                        str(p.position),
+                        f"{p.avgCost:.2f}"
+                    ])
+
+                table = _format_markdown_table(headers, rows)
+                account_title = f" for account {account}" if account else " (all accounts)"
+                return f"# Positions{account_title}\n\n{table}"
             except Exception as e:  # pragma: no cover
                 return f"Error getting positions: {e}"
 
@@ -517,38 +597,38 @@ class IBMCPServer:
                     return f"No contract details found for {symbol}"
                 d = details_list[0]
                 lines = [
-                    f"Contract Details for {symbol} ({getattr(c, 'conId', '')}):",
+                    f"# Contract Details for {symbol} ({getattr(c, 'conId', '')})",
                     "",
+                    "## Basic Information",
+                    f"- **Long Name**: {getattr(d, 'longName', '')}",
+                    f"- **Industry**: {getattr(d, 'industry', '')}",
+                    f"- **Category**: {getattr(d, 'category', '')}",
+                    f"- **Subcategory**: {getattr(d, 'subcategory', '')}",
+                    f"- **Market Name**: {getattr(d, 'marketName', '')}",
+                    f"- **Trading Hours**: {getattr(d, 'tradingHours', '')}",
+                    f"- **Liquid Hours**: {getattr(d, 'liquidHours', '')}",
+                    "",
+                    "## Financial Information",
+                    f"- **Min Tick**: {getattr(d, 'minTick', '')}",
+                    f"- **Price Magnifier**: {getattr(d, 'priceMagnifier', '')}",
+                    f"- **Market Cap**: {getattr(d, 'marketCap', 'N/A')}",
+                    f"- **Shares Outstanding**: {getattr(d, 'sharesOutstanding', 'N/A')}",
                 ]
-                lines.extend(
-                    [
-                        "**Basic Information:**",
-                        f"- Long Name: {getattr(d, 'longName', '')}",
-                        f"- Industry: {getattr(d, 'industry', '')}",
-                        f"- Category: {getattr(d, 'category', '')}",
-                        f"- Subcategory: {getattr(d, 'subcategory', '')}",
-                        f"- Market Name: {getattr(d, 'marketName', '')}",
-                        f"- Trading Hours: {getattr(d, 'tradingHours', '')}",
-                        f"- Liquid Hours: {getattr(d, 'liquidHours', '')}",
-                        "",
-                        "**Financial Information:**",
-                        f"- Min Tick: {getattr(d, 'minTick', '')}",
-                        f"- Price Magnifier: {getattr(d, 'priceMagnifier', '')}",
-                        f"- Market Cap: {getattr(d, 'marketCap', 'N/A')}",
-                        f"- Shares Outstanding: {getattr(d, 'sharesOutstanding', 'N/A')}",
-                    ]
-                )
+
                 # Dividends if available
                 dividends = getattr(d, "dividends", None)
                 if dividends:
                     lines.append("")
-                    lines.append("**Recent Dividends:**")
+                    lines.append("## Recent Dividends")
+                    dividend_items = []
                     for div in dividends[:5]:
                         if div is not None:
-                            lines.append(
-                                f"- {getattr(div, 'date', '')}: ${getattr(div, 'amount', '')} "
-                                f"({getattr(div, 'currency', '')})"
+                            dividend_items.append(
+                                f"{getattr(div, 'date', '')}: "
+                                f"${getattr(div, 'amount', '')} ({getattr(div, 'currency', '')})"
                             )
+                    lines.append(_format_markdown_list(dividend_items))
+
                 return "\n".join(lines)
             except Exception as e:  # pragma: no cover
                 return f"Error getting contract details: {e}"
