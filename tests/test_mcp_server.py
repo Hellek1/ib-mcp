@@ -7,7 +7,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from ib_mcp import IBMCPServer  # type: ignore
+from ib_mcp.server import IBMCPServer  # type: ignore
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
