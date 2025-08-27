@@ -23,7 +23,7 @@ class IBMCPServer:
     def __init__(
         self, host: str = "127.0.0.1", port: int = 7496, client_id: int = 1
     ) -> None:
-        self.server = FastMCP("IBKR MCP Server")
+        self.server = FastMCP(name="IBKR MCP Server", instructions="Fetch portfolio and market data using IBKR TWS APIs.")
         self.ib = ib.IB()
         self.host = host
         self.port = port
@@ -488,7 +488,7 @@ class IBMCPServer:
             except Exception as e:  # pragma: no cover
                 return f"Error getting fundamental data: {e}"
 
-        @self.server.tool(description="Retrieve portfolio positions and details")
+        @self.server.tool(description="Retrieve portfolio positions and details. If this tool does not return results you can still use get_positions which may return results.")
         async def get_portfolio(
             account: Annotated[str, "Account name (empty for all accounts)"] = "",
         ) -> str:
