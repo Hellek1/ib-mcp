@@ -23,7 +23,7 @@ def test_http_server_smoke() -> None:
         port = s.getsockname()[1]
 
     # Start the server in the background
-    server_process = subprocess.Popen(
+    server_process = subprocess.Popen(  # noqa: S603
         [
             sys.executable, "-m", "ib_mcp.server",
             "--transport", "http",

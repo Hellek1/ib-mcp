@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 def test_cli_help() -> None:
     """Test that CLI help works and shows new transport options."""
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603
         [sys.executable, "-m", "ib_mcp.server", "--help"],
         capture_output=True,
         text=True,
