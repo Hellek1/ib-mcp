@@ -678,12 +678,35 @@ class IBMCPServer:
         self.get_positions = get_positions  # type: ignore[attr-defined]
         self.get_contract_details = get_contract_details  # type: ignore[attr-defined]
 
-    def run(self) -> None:
-        """Run the FastMCP stdio server (synchronous)."""
+    def run(
+        self,
+        transport: str = "stdio",
+        http_host: str = "127.0.0.1",
+        http_port: int = 8000
+    ) -> None:
+        """Run the FastMCP server (synchronous).
+
+        Args:
+            transport: Transport type ("stdio" or "http")
+            http_host: Host to bind HTTP server to (if transport="http")
+            http_port: Port to bind HTTP server to (if transport="http")
+        """
         logging.basicConfig(level=logging.INFO)
+
+        # Log startup configuration
+        if transport == "http":
+            logger.info("IB-MCP transport=http http=%s:%s", http_host, http_port)
+        else:
+            logger.info("IB-MCP transport=stdio")
+
         try:
             # FastMCP's run manages its own event loop using anyio.run internally.
-            self.server.run()
+            if transport == "http":
+                # Use streamable-http transport for HTTP mode
+                self.server.run(transport="streamable-http", host=http_host, port=http_port)
+            else:
+                # Default STDIO transport
+                self.server.run()
         finally:  # pragma: no cover - disconnect path is runtime-only
             if self.connected:
                 self.ib.disconnect()
@@ -691,13 +714,15 @@ class IBMCPServer:
 
 
 def main() -> None:
-    """CLI entry point for running the server over stdio."""
+    """CLI entry point for running the server."""
     import argparse
     import os
 
     parser = argparse.ArgumentParser(
         description="Interactive Brokers MCP Server (FastMCP)"
     )
+
+    # IB connection parameters
     parser.add_argument(
         "--host",
         default=os.getenv("IB_HOST", "127.0.0.1"),
@@ -715,10 +740,30 @@ def main() -> None:
         default=int(os.getenv("IB_CLIENT_ID", "1")),
         help="Client ID (env: IB_CLIENT_ID)",
     )
+
+    # Transport configuration
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default=os.getenv("IB_MCP_TRANSPORT", "stdio"),
+        help="Transport protocol (stdio or http) (env: IB_MCP_TRANSPORT)",
+    )
+    parser.add_argument(
+        "--http-host",
+        default=os.getenv("IB_MCP_HTTP_HOST", "127.0.0.1"),
+        help="HTTP server host (env: IB_MCP_HTTP_HOST)",
+    )
+    parser.add_argument(
+        "--http-port",
+        type=int,
+        default=int(os.getenv("IB_MCP_HTTP_PORT", "8000")),
+        help="HTTP server port (env: IB_MCP_HTTP_PORT)",
+    )
+
     args = parser.parse_args()
 
     server = IBMCPServer(args.host, args.port, args.client_id)
-    server.run()
+    server.run(transport=args.transport, http_host=args.http_host, http_port=args.http_port)
 
 
 __all__ = ["IBMCPServer", "main"]

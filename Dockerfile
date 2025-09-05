@@ -32,6 +32,9 @@ RUN useradd -u 1000 -m appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
+# Expose port for HTTP mode (optional)
+EXPOSE 8000
+
 # Default entrypoint runs the MCP stdio server; environment variables can override host/port/client id
 ENTRYPOINT ["python", "-m", "ib_mcp.server"]
 

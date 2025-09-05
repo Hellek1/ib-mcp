@@ -58,6 +58,10 @@ poetry install
 
 ### Running the MCP Server
 
+#### STDIO Mode (Default)
+
+The default mode runs as a spawnable MCP server communicating via standard input/output. This is ideal for integration with MCP clients like Claude Desktop.
+
 ```bash
 # Using default settings (TWS on localhost:7497)
 poetry run ib-mcp-server
@@ -69,19 +73,61 @@ poetry run ib-mcp-server --host 127.0.0.1 --port 4001 --client-id 1
 poetry run ib-mcp-server --help
 ```
 
+#### HTTP Mode
+
+HTTP mode runs a persistent server that listens on a host and port, enabling multi-client access and network connectivity.
+
+```bash
+# Local HTTP server
+poetry run ib-mcp-server --transport http --http-host 127.0.0.1 --http-port 8000
+
+# Listen on all interfaces (for Docker/remote access) 
+poetry run ib-mcp-server --transport http --http-host 0.0.0.0 --http-port 8000
+
+# Using environment variables
+IB_MCP_TRANSPORT=http IB_MCP_HTTP_HOST=127.0.0.1 IB_MCP_HTTP_PORT=8000 poetry run ib-mcp-server
+```
+
+**Security Note**: HTTP mode binds to localhost (127.0.0.1) by default. For remote access, place behind a reverse proxy with proper authentication and use a protected network.
+
 ### Command Line Options
 
+#### IB Connection
 - `--host`: IB Gateway/TWS host (default: 127.0.0.1)
-- `--port`: IB Gateway/TWS port (default: 7497 for TWS, use 4001 for Gateway)
+- `--port`: IB Gateway/TWS port (default: 7497 for TWS, use 4001 for Gateway)  
 - `--client-id`: Unique client ID for the connection (default: 1)
+
+#### Transport Configuration
+- `--transport`: Transport protocol - `stdio` (default) or `http`
+- `--http-host`: HTTP server host (default: 127.0.0.1)
+- `--http-port`: HTTP server port (default: 8000)
+
+### Environment Variables
 
 You can also use environment variables instead of flags:
 
+#### IB Connection
 - `IB_HOST`
 - `IB_PORT`
 - `IB_CLIENT_ID`
 
+#### Transport
+- `IB_MCP_TRANSPORT` 
+- `IB_MCP_HTTP_HOST`
+- `IB_MCP_HTTP_PORT`
+
 Flags override environment variables if both are provided.
+
+### When to Use STDIO vs HTTP
+
+| Use Case | STDIO | HTTP |
+|----------|-------|------|
+| Claude Desktop integration | ✅ Recommended | ❌ Not supported |
+| Local single-client usage | ✅ Simple setup | ⚠️ Overkill |
+| Multi-client access | ❌ Not possible | ✅ Supported |
+| Remote/network access | ❌ Not possible | ✅ Supported |
+| Docker deployment | ✅ Simple | ✅ More flexible |
+| Production usage | ✅ Secure by default | ⚠️ Needs auth/proxy |
 
 ## Docker
 
@@ -92,6 +138,8 @@ docker build -t ib-mcp .
 ```
 
 ### Run (connect to TWS running on host)
+
+#### STDIO Mode (Default)
 
 On macOS/Windows Docker Desktop you can reach host via `host.docker.internal` (already the default):
 
@@ -119,8 +167,33 @@ Override arguments directly if preferred:
 docker run --rm -it ghcr.io/hellek1/ib-mcp --host host.docker.internal --port 4001 --client-id 2
 ```
 
+#### HTTP Mode
+
+Run as an HTTP server for multi-client or remote access:
+
+```bash
+# Local access
+docker run --rm -it -p 8000:8000 \
+   -e IB_HOST=host.docker.internal \
+   -e IB_PORT=7497 \
+   -e IB_MCP_TRANSPORT=http \
+   -e IB_MCP_HTTP_HOST=0.0.0.0 \
+   -e IB_MCP_HTTP_PORT=8000 \
+   ghcr.io/hellek1/ib-mcp
+
+# Or using command line arguments
+docker run --rm -it -p 8000:8000 \
+   ghcr.io/hellek1/ib-mcp \
+   --host host.docker.internal --port 7497 \
+   --transport http --http-host 0.0.0.0 --http-port 8000
+```
+
+The HTTP server will be available at `http://localhost:8000/mcp/`.
+
 
 ### MCP Client Integration
+
+#### STDIO Mode
 
 The server communicates via stdio using the MCP protocol. It can be integrated with MCP-compatible tools and LLM applications.
 
@@ -146,6 +219,10 @@ Example MCP client configuration (e.g. Claude Desktop) using Docker:
 
 Notes:
 1. Remove the `--add-host` line on macOS/Windows Docker Desktop (it's only needed on Linux).
+
+#### HTTP Mode
+
+For HTTP mode, connect to the server at `http://localhost:8000/mcp/` using any MCP-compatible HTTP client.
 
 ## Available Tools
 
