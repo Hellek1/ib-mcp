@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ib-mcp"
-version = "0.2.7"
+version = "0.2.8"
 description = "Model Context Protocol (MCP) server exposing Interactive Brokers data via ib_async + FastMCP"
 authors = ["David Hellekalek <hellekalek@gmail.com>"]
 license = "BSD-3-Clause"
@@ -36,6 +36,8 @@ ib_async = "^2.0.1"
 fastmcp = ">=2.11.0"
 # Low-level MCP protocol lib (kept separate; fastmcp currently builds on it)
 defusedxml = ">=0.7.1"
+# Ensure IANA timezone data is available on all platforms (Windows in particular)
+tzdata = ">=2024.1"
 
 # (Optional) pin pydantic major for stability if fastmcp upgrades; uncomment if needed
 # pydantic = "^2.8"

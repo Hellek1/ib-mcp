@@ -63,7 +63,5 @@ def test_cli_default_transport() -> None:
 
             # Verify run was called with correct transport params
             mock_server.run.assert_called_once_with(
-                transport="stdio",
-                http_host="127.0.0.1",
-                http_port=8000
+                transport="stdio", http_host="127.0.0.1", http_port=8000
             )

@@ -504,46 +504,6 @@ class IBMCPServer:
             except Exception as e:  # pragma: no cover
                 return f"Error getting fundamental data: {e}"
 
-        @self.server.tool(
-            description="Retrieve portfolio positions and details. If this tool does "
-            "not return results you can still use get_positions which may return results."
-        )
-        async def get_portfolio(
-            account: Annotated[str, "Account name (empty for all accounts)"] = "",
-        ) -> str:
-            await _ensure_connected()
-            try:
-                items = self.ib.portfolio(account)
-                if not items:
-                    return "No portfolio items found"
-
-                headers = [
-                    "Symbol",
-                    "Position",
-                    "Avg Cost",
-                    "Market Value",
-                    "Unrealized PnL",
-                ]
-                rows = []
-                for it in items:
-                    rows.append(
-                        [
-                            str(it.contract.symbol),
-                            str(it.position),
-                            f"{it.averageCost:.2f}",
-                            f"{it.marketValue:.2f}",
-                            f"{it.unrealizedPNL:.2f}",
-                        ]
-                    )
-
-                table = _format_markdown_table(headers, rows)
-                account_title = (
-                    f" for account {account}" if account else " (all accounts)"
-                )
-                return f"# Portfolio{account_title}\n\n{table}"
-            except Exception as e:  # pragma: no cover
-                return f"Error getting portfolio: {e}"
-
         @self.server.tool(description="Retrieve account summary information")
         async def get_account_summary(
             account: Annotated[str, "Account name (empty for all accounts)"] = "",
@@ -673,7 +633,6 @@ class IBMCPServer:
         self.search_contracts = search_contracts  # type: ignore[attr-defined]
         self.get_historical_news = get_historical_news  # type: ignore[attr-defined]
         self.get_fundamental_data = get_fundamental_data  # type: ignore[attr-defined]
-        self.get_portfolio = get_portfolio  # type: ignore[attr-defined]
         self.get_account_summary = get_account_summary  # type: ignore[attr-defined]
         self.get_positions = get_positions  # type: ignore[attr-defined]
         self.get_contract_details = get_contract_details  # type: ignore[attr-defined]
@@ -682,7 +641,7 @@ class IBMCPServer:
         self,
         transport: str = "stdio",
         http_host: str = "127.0.0.1",
-        http_port: int = 8000
+        http_port: int = 8000,
     ) -> None:
         """Run the FastMCP server (synchronous).
 
@@ -703,7 +662,9 @@ class IBMCPServer:
             # FastMCP's run manages its own event loop using anyio.run internally.
             if transport == "http":
                 # Use streamable-http transport for HTTP mode
-                self.server.run(transport="streamable-http", host=http_host, port=http_port)
+                self.server.run(
+                    transport="streamable-http", host=http_host, port=http_port
+                )
             else:
                 # Default STDIO transport
                 self.server.run()
@@ -763,7 +724,9 @@ def main() -> None:
     args = parser.parse_args()
 
     server = IBMCPServer(args.host, args.port, args.client_id)
-    server.run(transport=args.transport, http_host=args.http_host, http_port=args.http_port)
+    server.run(
+        transport=args.transport, http_host=args.http_host, http_port=args.http_port
+    )
 
 
 __all__ = ["IBMCPServer", "main"]
