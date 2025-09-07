@@ -503,46 +503,7 @@ class IBMCPServer:
                 return "\n".join(lines)
             except Exception as e:  # pragma: no cover
                 return f"Error getting fundamental data: {e}"
-
-        @self.server.tool(
-            description="Retrieve portfolio positions and details. If this tool does "
-            "not return results you can still use get_positions which may return results."
-        )
-        async def get_portfolio(
-            account: Annotated[str, "Account name (empty for all accounts)"] = "",
-        ) -> str:
-            await _ensure_connected()
-            try:
-                items = self.ib.portfolio(account)
-                if not items:
-                    return "No portfolio items found"
-
-                headers = [
-                    "Symbol",
-                    "Position",
-                    "Avg Cost",
-                    "Market Value",
-                    "Unrealized PnL",
-                ]
-                rows = []
-                for it in items:
-                    rows.append(
-                        [
-                            str(it.contract.symbol),
-                            str(it.position),
-                            f"{it.averageCost:.2f}",
-                            f"{it.marketValue:.2f}",
-                            f"{it.unrealizedPNL:.2f}",
-                        ]
-                    )
-
-                table = _format_markdown_table(headers, rows)
-                account_title = (
-                    f" for account {account}" if account else " (all accounts)"
-                )
-                return f"# Portfolio{account_title}\n\n{table}"
-            except Exception as e:  # pragma: no cover
-                return f"Error getting portfolio: {e}"
+            
 
         @self.server.tool(description="Retrieve account summary information")
         async def get_account_summary(
