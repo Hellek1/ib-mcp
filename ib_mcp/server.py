@@ -633,7 +633,6 @@ class IBMCPServer:
         self.search_contracts = search_contracts  # type: ignore[attr-defined]
         self.get_historical_news = get_historical_news  # type: ignore[attr-defined]
         self.get_fundamental_data = get_fundamental_data  # type: ignore[attr-defined]
-        self.get_portfolio = get_portfolio  # type: ignore[attr-defined]
         self.get_account_summary = get_account_summary  # type: ignore[attr-defined]
         self.get_positions = get_positions  # type: ignore[attr-defined]
         self.get_contract_details = get_contract_details  # type: ignore[attr-defined]
