@@ -503,7 +503,6 @@ class IBMCPServer:
                 return "\n".join(lines)
             except Exception as e:  # pragma: no cover
                 return f"Error getting fundamental data: {e}"
-            
 
         @self.server.tool(description="Retrieve account summary information")
         async def get_account_summary(
@@ -643,7 +642,7 @@ class IBMCPServer:
         self,
         transport: str = "stdio",
         http_host: str = "127.0.0.1",
-        http_port: int = 8000
+        http_port: int = 8000,
     ) -> None:
         """Run the FastMCP server (synchronous).
 
@@ -664,7 +663,9 @@ class IBMCPServer:
             # FastMCP's run manages its own event loop using anyio.run internally.
             if transport == "http":
                 # Use streamable-http transport for HTTP mode
-                self.server.run(transport="streamable-http", host=http_host, port=http_port)
+                self.server.run(
+                    transport="streamable-http", host=http_host, port=http_port
+                )
             else:
                 # Default STDIO transport
                 self.server.run()
@@ -724,7 +725,9 @@ def main() -> None:
     args = parser.parse_args()
 
     server = IBMCPServer(args.host, args.port, args.client_id)
-    server.run(transport=args.transport, http_host=args.http_host, http_port=args.http_port)
+    server.run(
+        transport=args.transport, http_host=args.http_host, http_port=args.http_port
+    )
 
 
 __all__ = ["IBMCPServer", "main"]

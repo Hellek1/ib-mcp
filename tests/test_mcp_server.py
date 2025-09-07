@@ -33,6 +33,7 @@ def test_server_run_parameters() -> None:
 
     # Test that run method has the expected signature
     import inspect
+
     sig = inspect.signature(server.run)
 
     # Check parameter names and defaults

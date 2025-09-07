@@ -81,7 +81,7 @@ HTTP mode runs a persistent server that listens on a host and port, enabling mul
 # Local HTTP server
 poetry run ib-mcp-server --transport http --http-host 127.0.0.1 --http-port 8000
 
-# Listen on all interfaces (for Docker/remote access) 
+# Listen on all interfaces (for Docker/remote access)
 poetry run ib-mcp-server --transport http --http-host 0.0.0.0 --http-port 8000
 
 # Using environment variables
@@ -94,7 +94,7 @@ IB_MCP_TRANSPORT=http IB_MCP_HTTP_HOST=127.0.0.1 IB_MCP_HTTP_PORT=8000 poetry ru
 
 #### IB Connection
 - `--host`: IB Gateway/TWS host (default: 127.0.0.1)
-- `--port`: IB Gateway/TWS port (default: 7497 for TWS, use 4001 for Gateway)  
+- `--port`: IB Gateway/TWS port (default: 7497 for TWS, use 4001 for Gateway)
 - `--client-id`: Unique client ID for the connection (default: 1)
 
 #### Transport Configuration
@@ -112,7 +112,7 @@ You can also use environment variables instead of flags:
 - `IB_CLIENT_ID`
 
 #### Transport
-- `IB_MCP_TRANSPORT` 
+- `IB_MCP_TRANSPORT`
 - `IB_MCP_HTTP_HOST`
 - `IB_MCP_HTTP_PORT`
 

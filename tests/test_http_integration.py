@@ -19,16 +19,21 @@ def test_http_server_smoke() -> None:
 
     # Find a free port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
+        s.bind(("", 0))
         port = s.getsockname()[1]
 
     # Start the server in the background
     server_process = subprocess.Popen(  # noqa: S603
         [
-            sys.executable, "-m", "ib_mcp.server",
-            "--transport", "http",
-            "--http-host", "127.0.0.1",
-            "--http-port", str(port)
+            sys.executable,
+            "-m",
+            "ib_mcp.server",
+            "--transport",
+            "http",
+            "--http-host",
+            "127.0.0.1",
+            "--http-port",
+            str(port),
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -44,7 +49,7 @@ def test_http_server_smoke() -> None:
 
         # Just test that the server is listening on the port
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            result = s.connect_ex(('127.0.0.1', port))
+            result = s.connect_ex(("127.0.0.1", port))
             assert result == 0, f"Server not listening on port {port}"
 
         # Try a simple GET request to see if server responds
@@ -53,7 +58,9 @@ def test_http_server_smoke() -> None:
         # Should get some kind of HTTP response (doesn't matter what)
         assert response.status_code is not None, "No HTTP response received"
 
-        print(f"✅ HTTP server test passed - server is listening and responding on port {port}")
+        print(
+            f"✅ HTTP server test passed - server is listening and responding on port {port}"
+        )
 
     finally:
         # Clean up server process
