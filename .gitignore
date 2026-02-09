@@ -33,7 +33,6 @@ build
 *.egg
 html
 doctrees
-poetry.lock
 *.csv
 *.json
 !mcp-config.json
