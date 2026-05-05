@@ -39,10 +39,9 @@ def _format_position_value(value: object) -> str:
 
 
 def _format_avg_cost(value: object) -> str:
-    try:
+    if isinstance(value, (int, float)):
         return f"{float(value):.2f}"
-    except (TypeError, ValueError):
-        return _format_position_value(value)
+    return _format_position_value(value)
 
 
 def _format_positions_markdown(positions: list[Any], account: str = "") -> str:
