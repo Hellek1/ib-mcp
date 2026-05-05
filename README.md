@@ -29,7 +29,7 @@ The MCP server provides the following tools for LLM interaction:
 ### 5. Portfolio and Account Information
 - **get_portfolio**: Retrieve portfolio positions and details
 - **get_account_summary**: Retrieve account summary information
-- **get_positions**: Retrieve current positions
+- **get_positions**: Retrieve current positions with contract metadata, including option expiry/strike/right/multiplier fields
 
 ## Prerequisites
 
@@ -261,6 +261,10 @@ get_portfolio(account="")
 get_account_summary(account="")
 get_positions(account="")
 ```
+
+`get_positions` returns a markdown table with account, symbol, security type,
+position, average cost, currency, exchange, local symbol, trading class, and
+contract ID. Option positions also include expiry, strike, right, and multiplier.
 
 ## Example Usage
 
