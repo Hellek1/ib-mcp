@@ -17,6 +17,79 @@ from pydantic import Field
 logger = logging.getLogger(__name__)
 
 
+def _format_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Format data as a markdown table."""
+    if not headers or not rows:
+        return ""
+
+    header_row = "| " + " | ".join(headers) + " |"
+    separator_row = "| " + " | ".join("---" for _ in headers) + " |"
+    data_rows = []
+    for row in rows:
+        padded_row = row + [""] * (len(headers) - len(row))
+        data_rows.append("| " + " | ".join(padded_row[: len(headers)]) + " |")
+
+    return "\n".join([header_row, separator_row] + data_rows)
+
+
+def _format_position_value(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _format_avg_cost(value: object) -> str:
+    if isinstance(value, (int, float)):
+        return f"{float(value):.2f}"
+    return _format_position_value(value)
+
+
+def _format_positions_markdown(positions: list[Any], account: str = "") -> str:
+    headers = [
+        "Account",
+        "Symbol",
+        "SecType",
+        "Position",
+        "Avg Cost",
+        "Expiry",
+        "Strike",
+        "Right",
+        "Multiplier",
+        "Currency",
+        "Local Symbol",
+        "Trading Class",
+        "Exchange",
+        "ConID",
+    ]
+    rows = []
+    for p in positions:
+        contract = getattr(p, "contract", None)
+        rows.append(
+            [
+                _format_position_value(getattr(p, "account", "")),
+                _format_position_value(getattr(contract, "symbol", "")),
+                _format_position_value(getattr(contract, "secType", "")),
+                _format_position_value(getattr(p, "position", "")),
+                _format_avg_cost(getattr(p, "avgCost", "")),
+                _format_position_value(
+                    getattr(contract, "lastTradeDateOrContractMonth", "")
+                ),
+                _format_position_value(getattr(contract, "strike", "")),
+                _format_position_value(getattr(contract, "right", "")),
+                _format_position_value(getattr(contract, "multiplier", "")),
+                _format_position_value(getattr(contract, "currency", "")),
+                _format_position_value(getattr(contract, "localSymbol", "")),
+                _format_position_value(getattr(contract, "tradingClass", "")),
+                _format_position_value(getattr(contract, "exchange", "")),
+                _format_position_value(getattr(contract, "conId", "")),
+            ]
+        )
+
+    table = _format_markdown_table(headers, rows)
+    account_title = f" for account {account}" if account else " (all accounts)"
+    return f"# Positions{account_title}\n\n{table}"
+
+
 class IBMCPServer:
     """Interactive Brokers MCP Server (FastMCP edition)."""
 
@@ -98,26 +171,6 @@ class IBMCPServer:
                 return _xml_element_to_markdown(root)
             except ET.ParseError:
                 return xml_data
-
-        def _format_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
-            """Format data as a markdown table."""
-            if not headers or not rows:
-                return ""
-
-            # Create header row
-            header_row = "| " + " | ".join(headers) + " |"
-
-            # Create separator row
-            separator_row = "| " + " | ".join("---" for _ in headers) + " |"
-
-            # Create data rows
-            data_rows = []
-            for row in rows:
-                # Pad row to match header length if needed
-                padded_row = row + [""] * (len(headers) - len(row))
-                data_rows.append("| " + " | ".join(padded_row[: len(headers)]) + " |")
-
-            return "\n".join([header_row, separator_row] + data_rows)
 
         def _format_markdown_list(items: list[str], ordered: bool = False) -> str:
             """Format items as a markdown list."""
@@ -546,23 +599,7 @@ class IBMCPServer:
                 if not positions:
                     return "No positions found"
 
-                headers = ["Account", "Symbol", "Position", "Avg Cost"]
-                rows = []
-                for p in positions:
-                    rows.append(
-                        [
-                            str(p.account),
-                            str(p.contract.symbol),
-                            str(p.position),
-                            f"{p.avgCost:.2f}",
-                        ]
-                    )
-
-                table = _format_markdown_table(headers, rows)
-                account_title = (
-                    f" for account {account}" if account else " (all accounts)"
-                )
-                return f"# Positions{account_title}\n\n{table}"
+                return _format_positions_markdown(positions, account)
             except Exception as e:  # pragma: no cover
                 return f"Error getting positions: {e}"
 
