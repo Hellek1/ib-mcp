@@ -6,7 +6,9 @@ for simpler registration and JSON-schema generation from type hints.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 from typing import Annotated, Any
 
 import defusedxml.ElementTree as ET
@@ -15,6 +17,14 @@ from fastmcp import FastMCP
 from pydantic import Field
 
 logger = logging.getLogger(__name__)
+
+# Maximum option contracts fetched per get_option_quotes call, to respect IB
+# market-data pacing limits.
+_MAX_QUOTE_BATCH = 20
+
+# Ceiling (seconds) for waiting on streaming market data to deliver a fresh
+# update before returning quotes; typical calls finish much sooner.
+_QUOTE_SETTLE_SECONDS = 4.0
 
 
 def _format_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -90,6 +100,276 @@ def _format_positions_markdown(positions: list[Any], account: str = "") -> str:
     return f"# Positions{account_title}\n\n{table}"
 
 
+def _fmt_num(value: object, decimals: int = 2) -> str:
+    """Format a number to fixed decimals; blank for None/NaN.
+
+    Used for model greeks, which keep their sign (a put delta is negative).
+    """
+    if value is None:
+        return ""
+    if isinstance(value, int | float):
+        num = float(value)
+        if math.isnan(num):
+            return ""
+        return f"{num:.{decimals}f}"
+    return str(value)
+
+
+def _fmt_price(value: object, decimals: int = 2) -> str:
+    """Format a market price; blank for None/NaN and IB's no-data sentinels.
+
+    IB reports -1 (or 0 with zero size) when a side has no quote, so
+    non-positive values render blank rather than as misleading prices.
+    """
+    if isinstance(value, int | float) and not math.isnan(float(value)):
+        if float(value) <= 0:
+            return ""
+    return _fmt_num(value, decimals=decimals)
+
+
+def _fmt_strike(value: object) -> str:
+    """Format a strike without trailing zeros (450.0 -> '450', 452.5 -> '452.5')."""
+    if value is None:
+        return ""
+    try:
+        num = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return str(value)
+    if math.isnan(num):
+        return ""
+    return f"{num:g}"
+
+
+def _strike_range_suffix(min_strike: float, max_strike: float) -> str:
+    """Describe the active strike filter for headers/footers ('' when unbounded)."""
+    if min_strike > 0 and max_strike > 0:
+        return f" in range [{_fmt_strike(min_strike)}, {_fmt_strike(max_strike)}]"
+    if min_strike > 0:
+        return f" at or above {_fmt_strike(min_strike)}"
+    if max_strike > 0:
+        return f" at or below {_fmt_strike(max_strike)}"
+    return ""
+
+
+def _format_option_chain_markdown(
+    symbol: str,
+    sec_type: str,
+    chains: list[Any],
+    min_strike: float = 0.0,
+    max_strike: float = 0.0,
+    max_strikes: int = 20,
+    strike_offset: int = 0,
+) -> str:
+    """Render chain parameters: expirations + a filtered, paginated strike window.
+
+    ``chains`` come from ``reqSecDefOptParams`` (contract reference data, not live
+    prices). Strikes are sorted ascending and expirations chronologically before
+    filtering/paginating, so ``strike_offset`` is deterministic across calls.
+    """
+    if not chains:
+        return f"No option chain parameters found for {symbol}"
+
+    suffix = _strike_range_suffix(min_strike, max_strike)
+
+    # Collapse chains that are identical apart from their routing exchange
+    # (e.g. XSP lists the same class on IBUSOPT, CBOE and SMART). The key
+    # carries everything rendered per group; values collect the exchanges.
+    groups: dict[tuple[Any, Any, tuple[Any, ...], tuple[float, ...]], list[str]] = {}
+    for chain in chains:
+        key = (
+            getattr(chain, "tradingClass", ""),
+            getattr(chain, "multiplier", ""),
+            tuple(sorted(getattr(chain, "expirations", []) or [])),
+            tuple(sorted(float(s) for s in (getattr(chain, "strikes", []) or []))),
+        )
+        exchanges = groups.setdefault(key, [])
+        exch = getattr(chain, "exchange", "")
+        if exch and exch not in exchanges:
+            exchanges.append(exch)
+
+    single_group = len(groups) == 1
+    out = [f"# Option Chain for {symbol} ({sec_type})", ""]
+    for (tclass, mult, expirations, strikes), exchanges in groups.items():
+        filtered = [
+            s
+            for s in strikes
+            if (min_strike <= 0 or s >= min_strike)
+            and (max_strike <= 0 or s <= max_strike)
+        ]
+        total = len(filtered)
+        window = filtered[strike_offset : strike_offset + max_strikes]
+
+        out.append(
+            f"## Trading Class {tclass} "
+            f"(exchanges: {', '.join(exchanges)}, multiplier {mult})"
+        )
+        out.append("")
+        out.append(f"**Expirations ({len(expirations)})**: {', '.join(expirations)}")
+        out.append("")
+        if window:
+            first = strike_offset + 1
+            last = strike_offset + len(window)
+            shown = ", ".join(_fmt_strike(s) for s in window)
+            out.append(f"**Strikes {first}–{last} of {total}{suffix}**: {shown}")
+            if last < total and single_group:
+                out.append("")
+                out.append(
+                    f"*Showing strikes {first}–{last} of {total}{suffix}; "
+                    f"pass strike_offset={last} for the next page.*"
+                )
+        elif total:
+            out.append(
+                f"**Strikes (0 of {total}{suffix})**: strike_offset="
+                f"{strike_offset} is past the last strike "
+                f"(valid offsets: 0-{total - 1})"
+            )
+        else:
+            out.append(f"**Strikes (0 of 0{suffix})**: none in range")
+        out.append("")
+
+    if not single_group:
+        classes = ", ".join(sorted({str(key[0]) for key in groups}))
+        out.append(
+            f"*{len(groups)} option chains returned (trading classes: "
+            f"{classes}); strike_offset applies to each strike list "
+            "independently — pass trading_class to page one chain reliably.*"
+        )
+        out.append("")
+
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _format_option_quotes_markdown(
+    symbol: str,
+    expiry: str,
+    right: str,
+    tickers: list[Any],
+    use_delayed: bool = True,
+    requested_strikes: list[float] | None = None,
+) -> str:
+    """Render a batch of option quotes as a markdown table (NaN/None -> blank).
+
+    If ``requested_strikes`` is given, strikes that did not qualify (not listed
+    for this expiry) are reported so the caller isn't left guessing.
+    """
+
+    def _strike_of(ticker: object) -> float:
+        contract = getattr(ticker, "contract", None)
+        try:
+            return float(getattr(contract, "strike", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    present = {round(_strike_of(t), 6) for t in tickers}
+    missing = (
+        [s for s in requested_strikes if round(float(s), 6) not in present]
+        if requested_strikes
+        else []
+    )
+    missing_note = ""
+    if missing:
+        listed = ", ".join(_fmt_strike(s) for s in missing)
+        missing_note = f"*Not listed for this expiry (skipped): {listed}*"
+
+    if not tickers:
+        base = f"No option quotes found for {symbol} {expiry} {right}"
+        return f"{base}\n\n{missing_note}" if missing_note else base
+
+    headers = ["Strike", "Bid", "Ask", "Last", "Close", "IV", "Delta"]
+    rows = []
+    und_price = ""
+    for ticker in sorted(tickers, key=_strike_of):
+        contract = getattr(ticker, "contract", None)
+        greeks = getattr(ticker, "modelGreeks", None)
+        if not und_price:
+            und_price = _fmt_price(getattr(greeks, "undPrice", None))
+        rows.append(
+            [
+                _fmt_strike(getattr(contract, "strike", None)),
+                _fmt_price(getattr(ticker, "bid", None)),
+                _fmt_price(getattr(ticker, "ask", None)),
+                _fmt_price(getattr(ticker, "last", None)),
+                _fmt_price(getattr(ticker, "close", None)),
+                _fmt_num(getattr(greeks, "impliedVol", None), decimals=4),
+                _fmt_num(getattr(greeks, "delta", None), decimals=4),
+            ]
+        )
+
+    table = _format_markdown_table(headers, rows)
+    data_type = "delayed-frozen" if use_delayed else "live"
+    header_bits = [
+        f"**Expiry**: {expiry}",
+        f"**Right**: {right}",
+        f"**Data**: {data_type}",
+    ]
+    if und_price:
+        header_bits.append(f"**Underlying**: {und_price}")
+    lines = [
+        f"# Option Quotes for {symbol} {expiry} {right}",
+        " | ".join(header_bits),
+        "",
+        table,
+        "",
+        "*IV/Delta from IB model greeks; blank cells mean no data or no "
+        "bid (illiquid strike or market closed).*",
+    ]
+    if missing_note:
+        lines.append("")
+        lines.append(missing_note)
+    return "\n".join(lines)
+
+
+def _format_index_quote_markdown(
+    symbol: str, ticker: object, use_delayed: bool = True
+) -> str:
+    """Render an index spot quote (bid/ask blank when IB reports the -1 sentinel)."""
+    if ticker is None:
+        return f"No quote found for index {symbol}"
+    data_type = "delayed-frozen" if use_delayed else "live"
+    return "\n".join(
+        [
+            f"# Index Quote for {symbol}",
+            f"**Data**: {data_type}",
+            "",
+            f"- **Last**: {_fmt_price(getattr(ticker, 'last', None))}",
+            f"- **Close**: {_fmt_price(getattr(ticker, 'close', None))}",
+            f"- **Bid**: {_fmt_price(getattr(ticker, 'bid', None))}",
+            f"- **Ask**: {_fmt_price(getattr(ticker, 'ask', None))}",
+        ]
+    )
+
+
+def _ticker_ready(ticker: object, last_stamp: object) -> bool:
+    """True once a ticker has received a fresh update with usable data.
+
+    ib_async reuses Ticker objects per contract for the connection's
+    lifetime, so a changed ``timestamp`` is required before trusting the
+    fields — otherwise a repeat request for the same contract would return
+    the previous call's stale values. Options wait for a price plus model
+    greeks (their last trade may be long ago or never); other contracts
+    wait for the last price (IB answers quickly with its -1/0 sentinel
+    when there is none). The caller's settle window caps the wait either way.
+    """
+    if getattr(ticker, "timestamp", None) == last_stamp:
+        return False
+
+    def _is_number(value: object) -> bool:
+        return isinstance(value, int | float) and not math.isnan(float(value))
+
+    contract = getattr(ticker, "contract", None)
+    if getattr(contract, "secType", "") == "OPT":
+        prices = (
+            getattr(ticker, "bid", None),
+            getattr(ticker, "ask", None),
+            getattr(ticker, "last", None),
+            getattr(ticker, "close", None),
+        )
+        if not any(_is_number(p) for p in prices):
+            return False
+        return getattr(ticker, "modelGreeks", None) is not None
+    return _is_number(getattr(ticker, "last", None))
+
+
 class IBMCPServer:
     """Interactive Brokers MCP Server (FastMCP edition)."""
 
@@ -161,6 +441,49 @@ class IBMCPServer:
                 elif isinstance(c, list):
                     result.extend(_flatten_contracts(c))
             return result
+
+        async def _fetch_tickers(
+            contracts: list[ib.Contract],
+            use_delayed: bool = True,
+            settle: float = _QUOTE_SETTLE_SECONDS,
+        ) -> list[ib.Ticker]:
+            # Delayed data (and option greeks) arrive as streaming ticks, not
+            # via one-shot snapshots, so subscribe briefly and cancel afterwards
+            # to free the market-data lines. The market data type is session-
+            # global, so it is set here, synchronously before subscribing, to
+            # keep concurrent calls with different types from interleaving.
+            self.ib.reqMarketDataType(4 if use_delayed else 1)
+            tickers: list[ib.Ticker] = []
+            try:
+                for c in contracts:
+                    tickers.append(
+                        self.ib.reqMktData(
+                            contract=c,
+                            genericTickList="",
+                            snapshot=False,
+                            regulatorySnapshot=False,
+                        )
+                    )
+                # ib_async reuses Ticker objects per contract for the life of
+                # the connection, so wait for a fresh update on each before
+                # returning; ``settle`` is a ceiling, not a fixed cost.
+                stamps = [getattr(t, "timestamp", None) for t in tickers]
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + settle
+                while loop.time() < deadline:
+                    await asyncio.sleep(0.25)
+                    if all(
+                        _ticker_ready(t, s)
+                        for t, s in zip(tickers, stamps, strict=True)
+                    ):
+                        break
+            finally:
+                for c in contracts[: len(tickers)]:
+                    try:
+                        self.ib.cancelMktData(c)
+                    except Exception as e:  # pragma: no cover - disconnect
+                        logger.warning("cancelMktData failed for %s: %s", c, e)
+            return tickers
 
         def _xml_to_markdown(xml_data: str) -> str:
             """Convert XML data to markdown; return as-is if not XML."""
@@ -663,6 +986,184 @@ class IBMCPServer:
             except Exception as e:  # pragma: no cover
                 return f"Error getting contract details: {e}"
 
+        @self.server.tool(
+            description=(
+                "List option-chain parameters (expirations and strikes) for an "
+                "underlying via reqSecDefOptParams. Strikes are sorted ascending, "
+                "filtered to [min_strike, max_strike] (0 = unbounded), then paginated "
+                "(max_strikes per page, default 20; strike_offset moves the window); "
+                "the output says how to fetch the next page. When several trading "
+                "classes are returned (e.g. SPX and SPXW), pass trading_class to "
+                "page one chain. Read-only; no market-data subscription required."
+            )
+        )
+        async def get_option_chain(
+            symbol: Annotated[str, "Underlying symbol (e.g., XSP, SPX, AAPL)"],
+            sec_type: Annotated[
+                str, "Underlying security type (IND, STK, ...)"
+            ] = "IND",
+            exchange: Annotated[
+                str, "Underlying exchange (CBOE for indices, SMART for stocks)"
+            ] = "CBOE",
+            currency: Annotated[str, "Currency (e.g., USD)"] = "USD",
+            trading_class: Annotated[
+                str, "Filter to a single option trading class (optional)"
+            ] = "",
+            min_strike: Annotated[float, "Lowest strike (0 = no bound)"] = 0.0,
+            max_strike: Annotated[float, "Highest strike (0 = no bound)"] = 0.0,
+            max_strikes: Annotated[
+                int, Field(description="Max strikes per page", ge=1, le=500)
+            ] = 20,
+            strike_offset: Annotated[
+                int, Field(description="Strike pagination offset", ge=0)
+            ] = 0,
+        ) -> str:
+            await _ensure_connected()
+            underlying = _create_contract(
+                symbol, sec_type=sec_type, exchange=exchange, currency=currency
+            )
+            try:
+                qualified = _flatten_contracts(
+                    await self.ib.qualifyContractsAsync(underlying)
+                )
+                if not qualified:
+                    return f"No contract found for {symbol}"
+                c = qualified[0]
+                chains = await self.ib.reqSecDefOptParamsAsync(
+                    underlyingSymbol=getattr(c, "symbol", symbol) or symbol,
+                    futFopExchange="",
+                    # Use the qualified contract's secType so conId inputs
+                    # (which qualify to their real type) work as everywhere.
+                    underlyingSecType=getattr(c, "secType", sec_type) or sec_type,
+                    underlyingConId=getattr(c, "conId", 0),
+                )
+                if trading_class:
+                    chains = [
+                        ch
+                        for ch in chains
+                        if getattr(ch, "tradingClass", "") == trading_class
+                    ]
+                return _format_option_chain_markdown(
+                    symbol,
+                    sec_type=sec_type,
+                    chains=chains,
+                    min_strike=min_strike,
+                    max_strike=max_strike,
+                    max_strikes=max_strikes,
+                    strike_offset=strike_offset,
+                )
+            except Exception as e:  # pragma: no cover
+                return f"Error getting option chain: {e}"
+
+        @self.server.tool(
+            description=(
+                "Fetch a batch of option quotes (bid/ask/last/close + model IV/delta) "
+                "for a list of strikes on one expiry/right, via a brief streaming "
+                "market-data subscription (delayed option data is not available as "
+                "one-shot snapshots). Duplicate strikes are ignored; capped at 20 "
+                "strikes per call to respect IB pacing. Defaults to delayed-frozen "
+                "data (no OPRA subscription needed); set use_delayed=false for live "
+                "data. Read-only."
+            )
+        )
+        async def get_option_quotes(
+            symbol: Annotated[str, "Underlying symbol (e.g., XSP)"],
+            expiry: Annotated[str, "Expiration date, format YYYYMMDD"],
+            right: Annotated[str, "Option right: P (put) or C (call)"],
+            strikes: Annotated[
+                list[float],
+                Field(
+                    description="Strike prices (max 20 per call)",
+                    min_length=1,
+                    max_length=_MAX_QUOTE_BATCH,
+                ),
+            ],
+            exchange: Annotated[str, "Option exchange (e.g., SMART)"] = "SMART",
+            currency: Annotated[str, "Currency (e.g., USD)"] = "USD",
+            trading_class: Annotated[
+                str, "Option trading class (defaults to the symbol)"
+            ] = "",
+            use_delayed: Annotated[
+                bool, "Use delayed-frozen data (no OPRA needed)"
+            ] = True,
+        ) -> str:
+            # Dedupe: double-subscribing one contract would leak an IB
+            # market-data line (only the newest request gets cancelled).
+            unique_strikes = sorted({float(s) for s in strikes})
+            if not unique_strikes:
+                return "Error getting option quotes: provide at least one strike"
+            if len(unique_strikes) > _MAX_QUOTE_BATCH:
+                return (
+                    f"Error getting option quotes: {len(unique_strikes)} unique "
+                    f"strikes requested; max {_MAX_QUOTE_BATCH} per call to "
+                    "respect IB pacing limits. Split into smaller batches."
+                )
+            await _ensure_connected()
+            try:
+                tclass = trading_class or symbol
+                contracts = [
+                    ib.Option(
+                        symbol=symbol,
+                        lastTradeDateOrContractMonth=expiry,
+                        strike=strike,
+                        right=right,
+                        exchange=exchange,
+                        currency=currency,
+                        tradingClass=tclass,
+                    )
+                    for strike in unique_strikes
+                ]
+                qualified = _flatten_contracts(
+                    await self.ib.qualifyContractsAsync(*contracts)
+                )
+                if not qualified:
+                    return f"No option contracts found for {symbol} {expiry} {right}"
+                tickers = await _fetch_tickers(qualified, use_delayed=use_delayed)
+                return _format_option_quotes_markdown(
+                    symbol,
+                    expiry=expiry,
+                    right=right,
+                    tickers=tickers,
+                    use_delayed=use_delayed,
+                    requested_strikes=unique_strikes,
+                )
+            except Exception as e:  # pragma: no cover
+                return f"Error getting option quotes: {e}"
+
+        @self.server.tool(
+            description=(
+                "Get the spot quote (last/close/bid/ask) for an index via a "
+                "brief streaming market-data subscription, delayed by default "
+                "(no market-data subscription needed), handy for "
+                "strike-from-spot math. Read-only."
+            )
+        )
+        async def get_index_quote(
+            symbol: Annotated[str, "Index symbol or conid (e.g., XSP, SPX)"],
+            exchange: Annotated[str, "Index exchange (e.g., CBOE)"] = "CBOE",
+            currency: Annotated[str, "Currency (e.g., USD)"] = "USD",
+            use_delayed: Annotated[
+                bool, "Use delayed-frozen data (no OPRA needed)"
+            ] = True,
+        ) -> str:
+            await _ensure_connected()
+            index = _create_contract(
+                symbol, sec_type="IND", exchange=exchange, currency=currency
+            )
+            try:
+                qualified = _flatten_contracts(
+                    await self.ib.qualifyContractsAsync(index)
+                )
+                if not qualified:
+                    return f"No index found for {symbol}"
+                tickers = await _fetch_tickers([qualified[0]], use_delayed=use_delayed)
+                ticker = tickers[0] if tickers else None
+                return _format_index_quote_markdown(
+                    symbol, ticker, use_delayed=use_delayed
+                )
+            except Exception as e:  # pragma: no cover
+                return f"Error getting index quote: {e}"
+
         # Keep references on self to make tools reachable in tests/REPL if needed
         self.lookup_contract = lookup_contract  # type: ignore[attr-defined]
         self.ticker_to_conid = ticker_to_conid  # type: ignore[attr-defined]
@@ -673,6 +1174,9 @@ class IBMCPServer:
         self.get_account_summary = get_account_summary  # type: ignore[attr-defined]
         self.get_positions = get_positions  # type: ignore[attr-defined]
         self.get_contract_details = get_contract_details  # type: ignore[attr-defined]
+        self.get_option_chain = get_option_chain  # type: ignore[attr-defined]
+        self.get_option_quotes = get_option_quotes  # type: ignore[attr-defined]
+        self.get_index_quote = get_index_quote  # type: ignore[attr-defined]
 
     def run(
         self,

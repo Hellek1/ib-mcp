@@ -19,14 +19,19 @@ The MCP server provides the following tools for LLM interaction:
 ### 2. Market Data
 - **get_historical_data**: Retrieve historical market data with configurable duration, bar size, and data type
 
-### 3. News
+### 3. Options
+- **get_option_chain**: List option-chain parameters (expirations and strikes) for an underlying, with strike-range filtering and pagination
+- **get_option_quotes**: Batch bid/ask/last/close and model IV/delta for a list of option strikes; defaults to delayed-frozen data (no OPRA subscription required)
+- **get_index_quote**: Spot quote (last/close/bid/ask) for an index, useful for strike-from-spot calculations
+
+### 4. News
 - **get_news**: Retrieve current news articles for a contract
 - **get_historical_news**: Retrieve historical news articles within a date range
 
-### 4. Fundamental Data
+### 5. Fundamental Data
 - **get_fundamental_data**: Retrieve fundamental data including financial summaries, ownership, financial statements, and more
 
-### 5. Portfolio and Account Information
+### 6. Portfolio and Account Information
 - **get_portfolio**: Retrieve portfolio positions and details
 - **get_account_summary**: Retrieve account summary information
 - **get_positions**: Retrieve current positions with contract metadata, including option expiry/strike/right/multiplier fields
@@ -237,6 +242,22 @@ ticker_to_conid(symbol, sec_type="STK", exchange="SMART", currency="USD")
 get_historical_data(symbol, duration="1 M", bar_size="1 day", data_type="TRADES", exchange="SMART", currency="USD")
 ```
 
+### Options
+```
+get_option_chain(symbol, sec_type="IND", exchange="CBOE", currency="USD", trading_class="", min_strike=0.0, max_strike=0.0, max_strikes=20, strike_offset=0)
+get_option_quotes(symbol, expiry, right, strikes, exchange="SMART", currency="USD", trading_class="", use_delayed=True)
+get_index_quote(symbol, exchange="CBOE", currency="USD", use_delayed=True)
+```
+
+`get_option_chain` returns the available expirations plus a strike window filtered
+to `[min_strike, max_strike]` (0 = unbounded) and paginated with `max_strikes`
+(default 20) and `strike_offset`; the output states how to page to the next window.
+When an underlying lists several trading classes (e.g. SPX and SPXW), pass
+`trading_class` to page one chain. `get_option_quotes` fetches up to 20 unique
+strikes per call (duplicates are ignored, to respect IB pacing) and defaults to
+delayed-frozen data, so it works without an OPRA subscription — pass
+`use_delayed=false` for live data. Both tools are read-only.
+
 ### News
 ```
 get_news(symbol, provider_codes="", exchange="SMART", currency="USD")
@@ -272,6 +293,8 @@ Once connected to an LLM through MCP, you can ask questions like:
 
 - "Look up the contract details for AAPL"
 - "Get the last month of daily historical data for TSLA"
+- "Show the XSP option chain strikes between 400 and 550"
+- "Get put quotes for XSP expiry 20261218 at strikes 440, 450 and 460"
 - "What are the recent news articles for Microsoft?"
 - "Show me the financial summary for Google"
 - "What positions do I currently have in my portfolio?"
