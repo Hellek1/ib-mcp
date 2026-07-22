@@ -126,9 +126,9 @@ class IBMCPServer:
                 self.news_provider_codes = "+".join(np.code for np in news_providers)
                 logger.info("News providers retrieved: %s", self.news_provider_codes)
             except Exception as e:  # pragma: no cover - relies on external service
-                logger.error("Failed to connect to IB: %s", e)
+                logger.exception("Failed to connect to IB")
                 raise ConnectionError(
-                    f"Cannot connect to Interactive Brokers: {e}"
+                    "Cannot connect to Interactive Brokers: An internal error occurred"
                 ) from e
 
         def _create_contract(
@@ -270,7 +270,8 @@ class IBMCPServer:
                 table = _format_markdown_table(headers, rows)
                 return f"# Found {len(contracts)} contract(s) for {symbol}\n\n{table}"
             except Exception as e:  # pragma: no cover - depends on network
-                return f"Error looking up contract: {e}"
+                logger.exception("Error in lookup_contract")
+                return "Error looking up contract: An internal error occurred"
 
         @self.server.tool(description="Convert ticker symbol to contract ID (conid)")
         async def ticker_to_conid(
@@ -313,7 +314,8 @@ class IBMCPServer:
                 result.append(_format_markdown_list(contract_list, ordered=True))
                 return "\n".join(result)
             except Exception as e:  # pragma: no cover
-                return f"Error converting ticker to conid: {e}"
+                logger.exception("Error in ticker_to_conid")
+                return "Error converting ticker to conid: An internal error occurred"
 
         @self.server.tool(description="Retrieve historical market data")
         async def get_historical_data(
@@ -386,7 +388,8 @@ class IBMCPServer:
 
                 return "\n".join(result)
             except Exception as e:  # pragma: no cover
-                return f"Error getting historical data: {e}"
+                logger.exception("Error in get_historical_data")
+                return "Error getting historical data: An internal error occurred"
 
         @self.server.tool(
             description="Search for contracts by partial symbol or company name"
@@ -421,7 +424,8 @@ class IBMCPServer:
 
                 return "\n".join(result)
             except Exception as e:  # pragma: no cover
-                return f"Error searching contracts: {e}"
+                logger.exception("Error in search_contracts")
+                return "Error searching contracts: An internal error occurred"
 
         @self.server.tool(description="Retrieve historical news articles")
         async def get_historical_news(
@@ -475,7 +479,8 @@ class IBMCPServer:
 
                 return "\n".join(result)
             except Exception as e:  # pragma: no cover
-                return f"Error getting historical news: {e}"
+                logger.exception("Error in get_historical_news")
+                return "Error getting historical news: An internal error occurred"
 
         @self.server.tool(
             description="Retrieve a full news article by ID and provider code"
@@ -520,7 +525,8 @@ class IBMCPServer:
                     ]
                 )
             except Exception as e:  # pragma: no cover
-                return f"Error retrieving article {providerCode}:{articleId}: {e}"
+                logger.exception("Error retrieving article %s:%s", providerCode, articleId)
+                return f"Error retrieving article {providerCode}:{articleId}: An internal error occurred"
 
         @self.server.tool(description="Retrieve fundamental data for a contract")
         async def get_fundamental_data(
@@ -555,7 +561,8 @@ class IBMCPServer:
                 ]
                 return "\n".join(lines)
             except Exception as e:  # pragma: no cover
-                return f"Error getting fundamental data: {e}"
+                logger.exception("Error in get_fundamental_data")
+                return "Error getting fundamental data: An internal error occurred"
 
         @self.server.tool(description="Retrieve account summary information")
         async def get_account_summary(
@@ -587,7 +594,8 @@ class IBMCPServer:
 
                 return "\n".join(result)
             except Exception as e:  # pragma: no cover
-                return f"Error getting account summary: {e}"
+                logger.exception("Error in get_account_summary")
+                return "Error getting account summary: An internal error occurred"
 
         @self.server.tool(description="Retrieve current positions")
         async def get_positions(
@@ -601,7 +609,8 @@ class IBMCPServer:
 
                 return _format_positions_markdown(positions, account)
             except Exception as e:  # pragma: no cover
-                return f"Error getting positions: {e}"
+                logger.exception("Error in get_positions")
+                return "Error getting positions: An internal error occurred"
 
         @self.server.tool(
             description=(
@@ -661,7 +670,8 @@ class IBMCPServer:
 
                 return "\n".join(lines)
             except Exception as e:  # pragma: no cover
-                return f"Error getting contract details: {e}"
+                logger.exception("Error in get_contract_details")
+                return "Error getting contract details: An internal error occurred"
 
         # Keep references on self to make tools reachable in tests/REPL if needed
         self.lookup_contract = lookup_contract  # type: ignore[attr-defined]
