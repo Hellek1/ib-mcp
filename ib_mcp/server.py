@@ -14,6 +14,7 @@ from typing import Annotated, Any
 import defusedxml.ElementTree as ET
 import ib_async as ib
 from fastmcp import FastMCP
+from ib_async.util import UNSET_DOUBLE
 from pydantic import Field
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,10 @@ _MAX_QUOTE_BATCH = 20
 # Ceiling (seconds) for waiting on streaming market data to deliver a fresh
 # update before returning quotes; typical calls finish much sooner.
 _QUOTE_SETTLE_SECONDS = 4.0
+
+# Ceiling (seconds) for awaiting IB's open-orders response, which resolves on
+# TWS's openOrderEnd; a stalled/unresponsive gateway may never send it.
+_OPEN_ORDERS_TIMEOUT = 10.0
 
 
 def _format_markdown_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -370,6 +375,111 @@ def _ticker_ready(ticker: object, last_stamp: object) -> bool:
     return _is_number(getattr(ticker, "last", None))
 
 
+def _format_order_price(value: object) -> str:
+    """Format an order price to 2 decimals, preserving sign; blank if unused.
+
+    A retrieved order reports 0 (not the dataclass default UNSET_DOUBLE) for an
+    unused limit or stop price — e.g. a limit order's aux/stop, or a market
+    order's limit — so both 0 and the sentinel render blank. Negative prices are
+    kept: a combo/spread order sold for a net credit has a negative limit.
+    """
+    if value is None:
+        return ""
+    try:
+        num = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return str(value)
+    if math.isnan(num) or num == 0 or num >= UNSET_DOUBLE:
+        return ""
+    return f"{num:.2f}"
+
+
+def _fmt_order_strike(value: object) -> str:
+    """Strike for an order row: blank for the 0.0 that non-option contracts carry."""
+    if not value:
+        return ""
+    return _format_position_value(value)
+
+
+def _filter_open_trades(trades: list[Any], account: str = "") -> list[Any]:
+    """Keep only genuinely-open trades, optionally for a single account.
+
+    ``reqAllOpenOrders`` can return cached trades that have since reached a
+    terminal state, so drop any whose status is done (mirroring ib_async's own
+    ``openTrades``), then filter by account when one is given.
+    """
+    result = []
+    for trade in trades:
+        status = getattr(getattr(trade, "orderStatus", None), "status", "")
+        if status in ib.OrderStatus.DoneStates:
+            continue
+        order_account = getattr(getattr(trade, "order", None), "account", "")
+        if account and order_account != account:
+            continue
+        result.append(trade)
+    return result
+
+
+def _format_open_orders_markdown(trades: list[Any], account: str = "") -> str:
+    """Render open/working orders as a markdown table (stocks and options).
+
+    ``trades`` are ib_async ``Trade`` objects; each bundles ``.contract``,
+    ``.order`` and ``.orderStatus``. Option orders surface their contract
+    fields (expiry/strike/right/multiplier) the same way positions do.
+    """
+    headers = [
+        "Account",
+        "Perm ID",
+        "Action",
+        "Qty",
+        "Symbol",
+        "SecType",
+        "Expiry",
+        "Strike",
+        "Right",
+        "Multiplier",
+        "Type",
+        "Limit",
+        "Aux",
+        "TIF",
+        "Status",
+        "Filled",
+        "Remaining",
+    ]
+    rows = []
+    for trade in trades:
+        order = getattr(trade, "order", None)
+        contract = getattr(trade, "contract", None)
+        status = getattr(trade, "orderStatus", None)
+        rows.append(
+            [
+                _format_position_value(getattr(order, "account", "")),
+                _format_position_value(getattr(order, "permId", "")),
+                _format_position_value(getattr(order, "action", "")),
+                _format_position_value(getattr(order, "totalQuantity", "")),
+                _format_position_value(getattr(contract, "symbol", "")),
+                _format_position_value(getattr(contract, "secType", "")),
+                _format_position_value(
+                    getattr(contract, "lastTradeDateOrContractMonth", "")
+                ),
+                _fmt_order_strike(getattr(contract, "strike", None)),
+                _format_position_value(getattr(contract, "right", "")),
+                _format_position_value(getattr(contract, "multiplier", "")),
+                _format_position_value(getattr(order, "orderType", "")),
+                _format_order_price(getattr(order, "lmtPrice", "")),
+                _format_order_price(getattr(order, "auxPrice", "")),
+                _format_position_value(getattr(order, "tif", "")),
+                _format_position_value(getattr(status, "status", "")),
+                _format_position_value(getattr(status, "filled", "")),
+                _format_position_value(getattr(status, "remaining", "")),
+            ]
+        )
+
+    table = _format_markdown_table(headers, rows)
+    account_title = f" for account {account}" if account else " (all accounts)"
+    return f"# Open Orders{account_title}\n\n{table}"
+
+
 class IBMCPServer:
     """Interactive Brokers MCP Server (FastMCP edition)."""
 
@@ -386,6 +496,9 @@ class IBMCPServer:
         self.client_id = client_id
         self.connected = False
         self.news_provider_codes: str = ""
+        # Serializes open-order requests: ib_async keys them on a single shared
+        # future, so concurrent calls would otherwise clobber one another.
+        self._open_orders_lock = asyncio.Lock()
 
         # Register FastMCP tools
         self._register_handlers()
@@ -928,6 +1041,37 @@ class IBMCPServer:
 
         @self.server.tool(
             description=(
+                "List open (working) orders as a markdown table. Covers every "
+                "instrument (stocks, options, futures, ...) and all API clients "
+                "plus manually entered TWS orders; option orders show expiry/"
+                "strike/right/multiplier. Read-only: reads existing orders, and "
+                "does not place, modify, or cancel anything."
+            )
+        )
+        async def get_open_orders(
+            account: Annotated[str, "Account name (empty for all accounts)"] = "",
+        ) -> str:
+            await _ensure_connected()
+            try:
+                # ib_async keys this request on a single shared future; serialize
+                # to stop concurrent calls clobbering it, and bound the wait so an
+                # unresponsive gateway can't hang the call forever.
+                async with self._open_orders_lock:
+                    trades = await asyncio.wait_for(
+                        self.ib.reqAllOpenOrdersAsync(),
+                        timeout=_OPEN_ORDERS_TIMEOUT,
+                    )
+                open_trades = _filter_open_trades(trades, account=account)
+                if not open_trades:
+                    return "No open orders found"
+                return _format_open_orders_markdown(open_trades, account=account)
+            except TimeoutError:  # pragma: no cover - needs an unresponsive gateway
+                return "Error getting open orders: timed out waiting for IB"
+            except Exception as e:  # pragma: no cover
+                return f"Error getting open orders: {e}"
+
+        @self.server.tool(
+            description=(
                 "Get detailed contract information including dividends and corporate actions"
             )
         )
@@ -1173,6 +1317,7 @@ class IBMCPServer:
         self.get_fundamental_data = get_fundamental_data  # type: ignore[attr-defined]
         self.get_account_summary = get_account_summary  # type: ignore[attr-defined]
         self.get_positions = get_positions  # type: ignore[attr-defined]
+        self.get_open_orders = get_open_orders  # type: ignore[attr-defined]
         self.get_contract_details = get_contract_details  # type: ignore[attr-defined]
         self.get_option_chain = get_option_chain  # type: ignore[attr-defined]
         self.get_option_quotes = get_option_quotes  # type: ignore[attr-defined]
