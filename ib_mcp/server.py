@@ -346,9 +346,11 @@ def _ticker_ready(ticker: object, last_stamp: object) -> bool:
     lifetime, so a changed ``timestamp`` is required before trusting the
     fields — otherwise a repeat request for the same contract would return
     the previous call's stale values. Options wait for a price plus model
-    greeks (their last trade may be long ago or never); other contracts
-    wait for the last price (IB answers quickly with its -1/0 sentinel
-    when there is none). The caller's settle window caps the wait either way.
+    greeks (their last trade may be long ago or never); other contracts are
+    ready on a last *or* close price — an index that has not traded may report
+    NaN for last, and requiring it would burn the caller's whole settle window
+    before returning the close it already had. The settle window caps the wait
+    either way.
     """
     if getattr(ticker, "timestamp", None) == last_stamp:
         return False
@@ -367,7 +369,9 @@ def _ticker_ready(ticker: object, last_stamp: object) -> bool:
         if not any(_is_number(p) for p in prices):
             return False
         return getattr(ticker, "modelGreeks", None) is not None
-    return _is_number(getattr(ticker, "last", None))
+    return _is_number(getattr(ticker, "last", None)) or _is_number(
+        getattr(ticker, "close", None)
+    )
 
 
 class IBMCPServer:
@@ -386,6 +390,9 @@ class IBMCPServer:
         self.client_id = client_id
         self.connected = False
         self.news_provider_codes: str = ""
+        # The market data type is a session-global setting, so serialize the
+        # whole set -> subscribe -> settle -> cancel cycle behind this lock.
+        self._market_data_lock = asyncio.Lock()
 
         # Register FastMCP tools
         self._register_handlers()
@@ -450,39 +457,41 @@ class IBMCPServer:
             # Delayed data (and option greeks) arrive as streaming ticks, not
             # via one-shot snapshots, so subscribe briefly and cancel afterwards
             # to free the market-data lines. The market data type is session-
-            # global, so it is set here, synchronously before subscribing, to
-            # keep concurrent calls with different types from interleaving.
-            self.ib.reqMarketDataType(4 if use_delayed else 1)
+            # global and setting it synchronously is not enough on its own: a
+            # concurrent call with the opposite use_delayed could flip it during
+            # the settle await, so the whole cycle runs under the lock.
             tickers: list[ib.Ticker] = []
-            try:
-                for c in contracts:
-                    tickers.append(
-                        self.ib.reqMktData(
-                            contract=c,
-                            genericTickList="",
-                            snapshot=False,
-                            regulatorySnapshot=False,
+            async with self._market_data_lock:
+                self.ib.reqMarketDataType(4 if use_delayed else 1)
+                try:
+                    for c in contracts:
+                        tickers.append(
+                            self.ib.reqMktData(
+                                contract=c,
+                                genericTickList="",
+                                snapshot=False,
+                                regulatorySnapshot=False,
+                            )
                         )
-                    )
-                # ib_async reuses Ticker objects per contract for the life of
-                # the connection, so wait for a fresh update on each before
-                # returning; ``settle`` is a ceiling, not a fixed cost.
-                stamps = [getattr(t, "timestamp", None) for t in tickers]
-                loop = asyncio.get_running_loop()
-                deadline = loop.time() + settle
-                while loop.time() < deadline:
-                    await asyncio.sleep(0.25)
-                    if all(
-                        _ticker_ready(t, s)
-                        for t, s in zip(tickers, stamps, strict=True)
-                    ):
-                        break
-            finally:
-                for c in contracts[: len(tickers)]:
-                    try:
-                        self.ib.cancelMktData(c)
-                    except Exception as e:  # pragma: no cover - disconnect
-                        logger.warning("cancelMktData failed for %s: %s", c, e)
+                    # ib_async reuses Ticker objects per contract for the life
+                    # of the connection, so wait for a fresh update on each
+                    # before returning; ``settle`` is a ceiling, not a fixed cost.
+                    stamps = [getattr(t, "timestamp", None) for t in tickers]
+                    loop = asyncio.get_running_loop()
+                    deadline = loop.time() + settle
+                    while loop.time() < deadline:
+                        await asyncio.sleep(0.25)
+                        if all(
+                            _ticker_ready(t, s)
+                            for t, s in zip(tickers, stamps, strict=True)
+                        ):
+                            break
+                finally:
+                    for c in contracts[: len(tickers)]:
+                        try:
+                            self.ib.cancelMktData(c)
+                        except Exception as e:  # pragma: no cover - disconnect
+                            logger.warning("cancelMktData failed for %s: %s", c, e)
             return tickers
 
         def _xml_to_markdown(xml_data: str) -> str:
@@ -1029,12 +1038,14 @@ class IBMCPServer:
                 if not qualified:
                     return f"No contract found for {symbol}"
                 c = qualified[0]
+                # Use the qualified contract's secType so conId inputs (which
+                # qualify to their real type) work as everywhere else — and so
+                # the rendered header agrees with what was actually requested.
+                qualified_sec_type = getattr(c, "secType", sec_type) or sec_type
                 chains = await self.ib.reqSecDefOptParamsAsync(
                     underlyingSymbol=getattr(c, "symbol", symbol) or symbol,
                     futFopExchange="",
-                    # Use the qualified contract's secType so conId inputs
-                    # (which qualify to their real type) work as everywhere.
-                    underlyingSecType=getattr(c, "secType", sec_type) or sec_type,
+                    underlyingSecType=qualified_sec_type,
                     underlyingConId=getattr(c, "conId", 0),
                 )
                 if trading_class:
@@ -1045,7 +1056,7 @@ class IBMCPServer:
                     ]
                 return _format_option_chain_markdown(
                     symbol,
-                    sec_type=sec_type,
+                    sec_type=qualified_sec_type,
                     chains=chains,
                     min_strike=min_strike,
                     max_strike=max_strike,
@@ -1073,7 +1084,7 @@ class IBMCPServer:
             strikes: Annotated[
                 list[float],
                 Field(
-                    description="Strike prices (max 20 per call)",
+                    description="Strike prices (max 20 per call, duplicates ignored)",
                     min_length=1,
                     max_length=_MAX_QUOTE_BATCH,
                 ),
@@ -1087,17 +1098,20 @@ class IBMCPServer:
                 bool, "Use delayed-frozen data (no OPRA needed)"
             ] = True,
         ) -> str:
+            # Count the raw list, matching the schema's max_length, so a direct
+            # call is rejected by the same rule (and gets the same message) that
+            # schema validation applies to MCP clients.
+            if not strikes:
+                return "Error getting option quotes: provide at least one strike"
+            if len(strikes) > _MAX_QUOTE_BATCH:
+                return (
+                    f"Error getting option quotes: {len(strikes)} strikes "
+                    f"requested; max {_MAX_QUOTE_BATCH} per call to respect IB "
+                    "pacing limits. Split into smaller batches."
+                )
             # Dedupe: double-subscribing one contract would leak an IB
             # market-data line (only the newest request gets cancelled).
             unique_strikes = sorted({float(s) for s in strikes})
-            if not unique_strikes:
-                return "Error getting option quotes: provide at least one strike"
-            if len(unique_strikes) > _MAX_QUOTE_BATCH:
-                return (
-                    f"Error getting option quotes: {len(unique_strikes)} unique "
-                    f"strikes requested; max {_MAX_QUOTE_BATCH} per call to "
-                    "respect IB pacing limits. Split into smaller batches."
-                )
             await _ensure_connected()
             try:
                 tclass = trading_class or symbol
