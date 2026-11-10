@@ -35,6 +35,7 @@ The MCP server provides the following tools for LLM interaction:
 - **get_portfolio**: Retrieve portfolio positions and details
 - **get_account_summary**: Retrieve account summary information
 - **get_positions**: Retrieve current positions with contract metadata, including option expiry/strike/right/multiplier fields
+- **get_open_orders**: List open (working) orders across all instruments (stocks, options, futures, ...); read-only (does not place, modify, or cancel orders)
 
 ## Prerequisites
 
@@ -281,11 +282,18 @@ Available report types:
 get_portfolio(account="")
 get_account_summary(account="")
 get_positions(account="")
+get_open_orders(account="")
 ```
 
 `get_positions` returns a markdown table with account, symbol, security type,
 position, average cost, currency, exchange, local symbol, trading class, and
 contract ID. Option positions also include expiry, strike, right, and multiplier.
+
+`get_open_orders` returns a markdown table of open (working) orders — every
+instrument (stocks, options, futures, ...), across all API clients and manually
+entered TWS orders — with action, quantity, order type, limit/aux price, TIF, status,
+and filled/remaining, plus the contract's option fields (expiry/strike/right/
+multiplier) for option orders. It is strictly read-only.
 
 ## Example Usage
 
@@ -298,6 +306,7 @@ Once connected to an LLM through MCP, you can ask questions like:
 - "What are the recent news articles for Microsoft?"
 - "Show me the financial summary for Google"
 - "What positions do I currently have in my portfolio?"
+- "What open orders do I have right now?"
 
 ## Data Formats
 
