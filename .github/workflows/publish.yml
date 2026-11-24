@@ -48,13 +48,14 @@ jobs:
           pip install --upgrade pip
           pip install "poetry==${POETRY_VERSION}"
 
+      # Exact-match key only: restoring a venv built from a different lock and
+      # upgrading it in place can corrupt packages whose files move between
+      # distributions (e.g. fastmcp 3.4 moved its modules into fastmcp-slim).
       - name: Cache Poetry virtualenvs
         uses: actions/cache@v4
         with:
           path: ~/.cache/pypoetry/virtualenvs
           key: poetry-venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('poetry.lock') }}
-          restore-keys: |
-            poetry-venv-${{ runner.os }}-${{ matrix.python-version }}-
 
       - name: Install dependencies
         run: |
