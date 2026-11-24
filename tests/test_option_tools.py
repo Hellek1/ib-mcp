@@ -14,6 +14,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -235,26 +237,40 @@ def test_option_quotes_empty_reports_all_missing() -> None:
 
 
 async def test_option_quotes_batch_cap_rejects_oversized_request() -> None:
-    """>20 unique strikes is rejected before any connection (offline-safe)."""
+    """>20 strikes is rejected before any connection (offline-safe).
+
+    The runtime counts the raw list, exactly as the schema's max_length does,
+    so direct calls and MCP clients are held to the same rule.
+    """
     server = IBMCPServer()
     strikes = [float(400 + i) for i in range(21)]
     out = await server.get_option_quotes(
         "XSP", expiry="20260828", right="P", strikes=strikes
     )
     assert "max 20" in out
-    assert "21 unique strikes" in out
+    assert "21 strikes" in out
 
 
-async def test_option_quotes_batch_cap_counts_unique_strikes() -> None:
-    """Duplicate strikes are deduped before the cap (they would leak IB
-    market-data lines if subscribed twice), so the error names the unique
-    count, not the raw length."""
+async def test_option_quotes_dedupes_duplicate_strikes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Duplicates within the cap are deduped (subscribing one contract twice
+    would leak an IB market-data line), so they never reach qualification."""
     server = IBMCPServer()
-    strikes = [float(400 + i) for i in range(21)] + [400.0, 401.0, 402.0]
+    captured: list[float] = []
+
+    async def fake_qualify(*contracts: object) -> list[object]:
+        captured.extend(getattr(c, "strike", 0.0) for c in contracts)
+        return []
+
+    monkeypatch.setattr(server.ib, "qualifyContractsAsync", fake_qualify)
+    server.connected = True  # skip connecting; only the dedupe path is exercised
+
     out = await server.get_option_quotes(
-        "XSP", expiry="20260828", right="P", strikes=strikes
+        "XSP", expiry="20260828", right="P", strikes=[450.0, 450.0, 455.0]
     )
-    assert "21 unique strikes" in out  # 24 raw values, 21 unique
+    assert captured == [450.0, 455.0]  # 3 raw values -> 2 unique contracts
+    assert "No option contracts found" in out
 
 
 async def test_option_quotes_requires_at_least_one_strike() -> None:
@@ -298,7 +314,7 @@ def test_ticker_ready_requires_fresh_timestamp() -> None:
 
 
 def test_ticker_ready_gates_options_on_greeks_and_prices() -> None:
-    """Options need a price field and model greeks; indices need last."""
+    """Options need a price field and model greeks; indices need last or close."""
     nan = float("nan")
     option = _ticker(758.0, bid=nan, ask=nan, last=nan, close=nan)
     option.contract.secType = "OPT"
@@ -310,15 +326,20 @@ def test_ticker_ready_gates_options_on_greeks_and_prices() -> None:
     option.modelGreeks = object()
     assert _ticker_ready(option, 1.0) is True
 
+    # An index that has not traded reports NaN for last; close alone must be
+    # enough or the call would burn its whole settle window for data it has.
     index = SimpleNamespace(
         contract=SimpleNamespace(secType="IND"),
         bid=-1.0,
         ask=nan,
-        last=nan,  # close/bid alone are not enough: wait for last
+        last=nan,
         close=754.36,
         modelGreeks=None,
         timestamp=2.0,
     )
+    assert _ticker_ready(index, 1.0) is True
+
+    index.close = nan  # neither last nor close yet -> keep waiting
     assert _ticker_ready(index, 1.0) is False
     index.last = 0.0  # IB's answered no-trade sentinel counts as done
     assert _ticker_ready(index, 1.0) is True
