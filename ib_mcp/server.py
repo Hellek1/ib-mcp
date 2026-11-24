@@ -16,6 +16,8 @@ import ib_async as ib
 from fastmcp import FastMCP
 from pydantic import Field
 
+from ib_mcp import __version__
+
 logger = logging.getLogger(__name__)
 
 # Maximum option contracts fetched per get_option_quotes call, to respect IB
@@ -378,6 +380,7 @@ class IBMCPServer:
     ) -> None:
         self.server = FastMCP(
             name="IBKR MCP Server",
+            version=__version__,
             instructions="Fetch portfolio and market data using IBKR TWS APIs.",
         )
         self.ib = ib.IB()

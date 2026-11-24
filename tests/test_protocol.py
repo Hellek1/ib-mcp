@@ -20,6 +20,7 @@ import pytest
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from ib_mcp import __version__
 from ib_mcp.server import IBMCPServer
 
 # First sessionless protocol revision; "auto" must negotiate at least this.
@@ -81,6 +82,7 @@ async def test_handshake_and_tool_listing(mode: str) -> None:
     async with Client(server.server, mode=mode) as client:
         assert_protocol_era(mode, client.protocol_version)
         assert client.server_info.name == "IBKR MCP Server"
+        assert client.server_info.version == __version__
         assert client.instructions == ("Fetch portfolio and market data using IBKR TWS APIs.")
 
         tools = await client.list_tools()
