@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Hellek1/ib-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Hellek1/ib-mcp/actions/workflows/ci.yml)
 
-Lightweight Model Context Protocol (MCP) server exposing read-only Interactive Brokers data (contracts, historical data, fundamentals, news, portfolio, account) via the asynchronous [`ib_async`](https://ib-api-reloaded.github.io/ib_async/) library and [`FastMCP`](https://github.com/modelcontextprotocol/fastmcp). Ideal for feeding financial data into LLM workflows and autonomous agents while keeping trading disabled.
+Lightweight Model Context Protocol (MCP) server exposing read-only Interactive Brokers data (contracts, historical data, fundamentals, news, portfolio, account) via the asynchronous [`ib_async`](https://ib-api-reloaded.github.io/ib_async/) library and [`FastMCP`](https://github.com/PrefectHQ/fastmcp). Ideal for feeding financial data into LLM workflows and autonomous agents while keeping trading disabled.
 
 ## Overview
 
@@ -133,6 +133,15 @@ Flags override environment variables if both are provided.
 | Remote/network access | ❌ Not possible | ✅ Supported |
 | Docker deployment | ✅ Simple | ✅ More flexible |
 | Production usage | ✅ Secure by default | ⚠️ Needs auth/proxy |
+
+### MCP Protocol Compatibility
+
+Built on FastMCP 4 and the MCP Python SDK v2, the server negotiates the protocol version per connection over both stdio and HTTP:
+
+- Current clients get the sessionless `2026-07-28` protocol revision.
+- Clients that use the earlier `initialize` handshake (`2025-11-25` and before) keep working unchanged.
+
+Both eras are covered by the test suite (`tests/test_protocol.py`, `tests/test_http_integration.py`).
 
 ## Docker
 
